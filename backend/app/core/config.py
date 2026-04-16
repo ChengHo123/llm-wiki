@@ -1,0 +1,20 @@
+from pydantic_settings import BaseSettings
+from functools import lru_cache
+
+
+class Settings(BaseSettings):
+    DATABASE_URL: str = "postgresql+asyncpg://wiki:wiki@localhost:5432/wiki"
+    LLM_API_KEY: str
+    LLM_BASE_URL: str  # LiteLLM endpoint，例如 http://your-litellm-host/v1
+    LLM_MODEL: str = "gpt-4o"
+    UPLOAD_DIR: str = "/app/uploads"
+    MAX_UPLOAD_SIZE_MB: int = 50
+    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+
+    class Config:
+        env_file = ".env"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
