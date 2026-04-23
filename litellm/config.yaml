@@ -1,0 +1,9 @@
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+  num_retries: 0
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/LITELLM_DATABASE_URL
+  database_connection_pool_limit: 10

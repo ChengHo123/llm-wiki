@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, ChevronLeft, AlertTriangle, RefreshCw, Tag } from 'lucide-react'
-import { listWikiPages, getWikiPage, lintWiki, type WikiPageSummary, type WikiPageDetail } from '../api/client'
+import { BookOpen, ChevronLeft, AlertTriangle, RefreshCw, Trash2 } from 'lucide-react'
+import { listWikiPages, getWikiPage, lintWiki, deleteWikiPage, type WikiPageSummary, type WikiPageDetail } from '../api/client'
 
 const PAGE_TYPE_COLOR: Record<string, string> = {
   index: 'bg-purple-100 text-purple-700',
@@ -49,12 +49,27 @@ export default function WikiPage() {
   if (selected) {
     return (
       <div className="p-8 max-w-3xl mx-auto">
-        <button
-          onClick={() => setSelected(null)}
-          className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-4"
-        >
-          <ChevronLeft size={16} /> 返回列表
-        </button>
+        <div className="flex items-center justify-between mb-4">
+          <button
+            onClick={() => setSelected(null)}
+            className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+          >
+            <ChevronLeft size={16} /> 返回列表
+          </button>
+          <button
+            onClick={async () => {
+              if (!confirm(`刪除頁面「${selected.title}」？`)) return
+              try {
+                await deleteWikiPage(selected.id)
+                setSelected(null)
+                setPages(await listWikiPages())
+              } catch { setError('刪除失敗') }
+            }}
+            className="flex items-center gap-1 text-sm text-red-400 hover:text-red-600"
+          >
+            <Trash2 size={14} /> 刪除頁面
+          </button>
+        </div>
         <div className="flex items-center gap-2 mb-1">
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_COLOR[selected.page_type] || 'bg-gray-100 text-gray-600'}`}>
             {selected.page_type}

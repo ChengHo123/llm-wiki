@@ -15,6 +15,7 @@ class WikiPage(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     api_key_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=False)
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     slug: Mapped[str] = mapped_column(String(500), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -27,5 +28,5 @@ class WikiPage(Base):
         "WikiLink", foreign_keys="WikiLink.source_page_id", back_populates="source_page", cascade="all, delete-orphan"
     )
     incoming_links: Mapped[list["WikiLink"]] = relationship(
-        "WikiLink", foreign_keys="WikiLink.target_page_id", back_populates="target_page"
+        "WikiLink", foreign_keys="WikiLink.target_page_id", back_populates="target_page", passive_deletes=True
     )

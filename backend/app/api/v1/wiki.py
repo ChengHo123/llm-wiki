@@ -122,6 +122,28 @@ async def get_wiki_graph(
     )
 
 
+@router.delete("/wiki/pages/{page_id}")
+async def delete_wiki_page(
+    page_id: uuid.UUID,
+    api_key: ApiKey = Depends(get_current_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """刪除指定 wiki 頁面（連結會因 CASCADE 自動清除）"""
+    result = await db.execute(
+        select(WikiPage).where(
+            WikiPage.id == page_id,
+            WikiPage.api_key_id == api_key.id,
+        )
+    )
+    page = result.scalar_one_or_none()
+    if not page:
+        raise HTTPException(status_code=404, detail="頁面不存在")
+
+    await db.delete(page)
+    await db.commit()
+    return {"deleted_page_id": str(page_id)}
+
+
 @router.post("/wiki/lint")
 async def lint_wiki(
     api_key: ApiKey = Depends(get_current_key),

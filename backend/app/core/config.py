@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4o"
     UPLOAD_DIR: str = "/app/uploads"
     MAX_UPLOAD_SIZE_MB: int = 50
+    MAX_WIKI_PAGES: int = 30  # 檢索容量上限；達到即拒絕上傳，避免 query 漏頁
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     class Config:

@@ -3,17 +3,18 @@ import uuid
 from pathlib import Path
 
 import aiofiles
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete, func
 from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.models.api_key import ApiKey
 from app.models.document import Document
+from app.models.wiki_page import WikiPage
 from app.core.security import get_current_key
 from app.core.config import get_settings
-from app.services.ingest import run_ingest
+from app.services.ingest_queue import enqueue
 
 router = APIRouter()
 settings = get_settings()
@@ -40,7 +41,6 @@ class DocumentOut(BaseModel):
 
 @router.post("/documents", response_model=DocumentOut)
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     api_key: ApiKey = Depends(get_current_key),
     db: AsyncSession = Depends(get_db),
@@ -48,6 +48,19 @@ async def upload_document(
     """上傳文件並非同步觸發 ingest"""
     if file.content_type not in ALLOWED_TYPES:
         raise HTTPException(status_code=415, detail=f"不支援的檔案類型: {file.content_type}")
+
+    count_result = await db.execute(
+        select(func.count(WikiPage.id)).where(WikiPage.api_key_id == api_key.id)
+    )
+    current_pages = count_result.scalar_one()
+    if current_pages >= settings.MAX_WIKI_PAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Wiki 已達 {settings.MAX_WIKI_PAGES} 頁上限（目前 {current_pages} 頁）。"
+                "為避免查詢漏頁，請先刪除既有文件或調高 MAX_WIKI_PAGES。"
+            ),
+        )
 
     max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
     content = await file.read()
@@ -69,13 +82,13 @@ async def upload_document(
         filename=file.filename,
         content_type=file.content_type,
         file_path=str(file_path),
-        status="pending",
+        status="queued",
     )
     db.add(doc)
     await db.commit()
     await db.refresh(doc)
 
-    background_tasks.add_task(run_ingest, doc.id, db)
+    await enqueue(doc.id)
 
     return DocumentOut(
         id=str(doc.id),
@@ -109,3 +122,81 @@ async def list_documents(
         )
         for d in docs
     ]
+
+
+@router.post("/documents/{document_id}/retry")
+async def retry_document(
+    document_id: uuid.UUID,
+    api_key: ApiKey = Depends(get_current_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """重新觸發失敗文件的 ingest"""
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.api_key_id == api_key.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if doc.status == "processing":
+        raise HTTPException(status_code=409, detail="文件正在處理中")
+
+    doc.status = "queued"
+    doc.error_message = None
+    await db.commit()
+
+    await enqueue(doc.id)
+
+    return DocumentOut(
+        id=str(doc.id),
+        filename=doc.filename,
+        content_type=doc.content_type,
+        status=doc.status,
+        error_message=doc.error_message,
+        created_at=doc.created_at.isoformat(),
+    )
+
+
+@router.delete("/documents/{document_id}")
+async def delete_document(
+    document_id: uuid.UUID,
+    delete_pages: bool = True,
+    api_key: ApiKey = Depends(get_current_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """刪除文件。delete_pages=true（預設）時，一併刪除由此文件產生的 wiki 頁面。"""
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.api_key_id == api_key.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    pages_deleted = 0
+    if delete_pages:
+        pages_result = await db.execute(
+            select(WikiPage).where(
+                WikiPage.source_document_id == document_id,
+                WikiPage.api_key_id == api_key.id,
+            )
+        )
+        pages = pages_result.scalars().all()
+        for page in pages:
+            await db.delete(page)
+        pages_deleted = len(pages)
+
+    # 刪除實體檔案
+    try:
+        Path(doc.file_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    await db.delete(doc)
+    await db.commit()
+
+    return {"deleted_document_id": str(document_id), "pages_deleted": pages_deleted}

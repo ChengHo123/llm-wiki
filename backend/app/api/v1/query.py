@@ -1,18 +1,23 @@
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.models.api_key import ApiKey
 from app.core.security import get_current_key
-from app.services.query_service import run_query
+from app.services.query_service import run_query, run_query_stream
 
 router = APIRouter()
 
 
 class QueryRequest(BaseModel):
     question: str
-    save_to_wiki: bool = False
+    save_to_wiki: bool = False  # 僅非串流端點使用
+
+
+class QueryStreamRequest(BaseModel):
+    question: str
 
 
 class PageRef(BaseModel):
@@ -41,3 +46,21 @@ async def query_wiki(
         save_to_wiki=body.save_to_wiki,
     )
     return QueryResponse(**result)
+
+
+@router.post("/query/stream")
+async def query_wiki_stream(
+    body: QueryStreamRequest,
+    api_key: ApiKey = Depends(get_current_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """串流版：以 NDJSON 回傳 pages / chunk / judge / done 事件。
+    自動判斷是否存回 wiki，不接受手動 save_to_wiki 參數。"""
+    return StreamingResponse(
+        run_query_stream(
+            question=body.question,
+            api_key_id=api_key.id,
+            db=db,
+        ),
+        media_type="application/x-ndjson",
+    )

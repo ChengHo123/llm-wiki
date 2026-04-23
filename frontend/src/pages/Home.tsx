@@ -1,17 +1,26 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Key, Upload, FileText, CheckCircle, XCircle, Clock, RefreshCw } from 'lucide-react'
+import { Key, Upload, FileText, CheckCircle, XCircle, Clock, RefreshCw, Trash2, RotateCcw } from 'lucide-react'
 import {
-  createApiKey, uploadDocument, listDocuments,
+  createApiKey, uploadDocument, listDocuments, deleteDocument, retryDocument,
   getStoredApiKey, setStoredApiKey, clearStoredApiKey,
   type Document,
 } from '../api/client'
 
-const STATUS_ICON = {
+const STATUS_ICON: Record<string, JSX.Element> = {
   done: <CheckCircle size={14} className="text-green-500" />,
   error: <XCircle size={14} className="text-red-500" />,
   processing: <RefreshCw size={14} className="text-blue-500 animate-spin" />,
+  queued: <Clock size={14} className="text-yellow-400" />,
   pending: <Clock size={14} className="text-gray-400" />,
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  done: '完成',
+  error: '失敗',
+  processing: '處理中',
+  queued: '排隊中',
+  pending: '等待中',
 }
 
 export default function HomePage() {
@@ -177,9 +186,36 @@ export default function HomePage() {
                     <FileText size={14} className="text-gray-400 flex-shrink-0" />
                     <span className="flex-1 text-sm text-gray-700 truncate">{doc.filename}</span>
                     <div className="flex items-center gap-1 text-xs text-gray-500">
-                      {STATUS_ICON[doc.status as keyof typeof STATUS_ICON]}
-                      <span>{doc.status}</span>
+                      {STATUS_ICON[doc.status] ?? <Clock size={14} />}
+                      <span>{STATUS_LABEL[doc.status] ?? doc.status}</span>
                     </div>
+                    {doc.status === 'error' && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await retryDocument(doc.id)
+                            await loadDocs()
+                          } catch { setError('重試失敗') }
+                        }}
+                        className="text-gray-300 hover:text-blue-500 transition-colors flex-shrink-0"
+                        title="重新處理"
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    )}
+                    <button
+                      onClick={async () => {
+                        if (!confirm(`刪除「${doc.filename}」及其產生的 wiki 頁面？`)) return
+                        try {
+                          await deleteDocument(doc.id)
+                          await loadDocs()
+                        } catch { setError('刪除失敗') }
+                      }}
+                      className="text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
+                      title="刪除文件與對應 wiki 頁面"
+                    >
+                      <Trash2 size={13} />
+                    </button>
                   </li>
                 ))}
               </ul>

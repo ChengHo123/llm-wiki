@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { RefreshCw, ZoomIn, ZoomOut, Maximize2, BookOpen } from 'lucide-react'
-import { getWikiGraph, getWikiPage, type GraphData, type WikiPageDetail } from '../api/client'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { RefreshCw, ZoomIn, ZoomOut, Maximize2, BookOpen, Trash2 } from 'lucide-react'
+import { getWikiGraph, getWikiPage, deleteWikiPage, type GraphData, type WikiPageDetail } from '../api/client'
 
 const PAGE_TYPE_COLOR: Record<string, string> = {
   index:   '#8b5cf6',
@@ -212,15 +214,26 @@ export default function GraphPage() {
                 更新：{new Date(selectedPage.updated_at).toLocaleString('zh-TW')}
               </p>
             </div>
-            <button
-              onClick={() => setSelectedPage(null)}
-              className="text-gray-400 hover:text-gray-600 flex-shrink-0 mt-1"
-            >✕</button>
+            <div className="flex items-center gap-2 flex-shrink-0 mt-1">
+              <button
+                onClick={async () => {
+                  if (!confirm(`刪除頁面「${selectedPage.title}」？`)) return
+                  try {
+                    await deleteWikiPage(selectedPage.id)
+                    setSelectedPage(null)
+                    load()
+                  } catch {}
+                }}
+                className="text-gray-300 hover:text-red-500 transition-colors"
+                title="刪除此頁面"
+              >
+                <Trash2 size={14} />
+              </button>
+              <button onClick={() => setSelectedPage(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-4 prose prose-sm max-w-none text-sm">
-            {selectedPage.content.split('\n').map((line, i) => (
-              <p key={i} className="mb-1">{line || <br />}</p>
-            ))}
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedPage.content}</ReactMarkdown>
           </div>
         </div>
       )}

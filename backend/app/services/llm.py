@@ -1,15 +1,132 @@
 import base64
+import json
+import logging
+import re
 from pathlib import Path
+from typing import AsyncIterator, Type, TypeVar
 
 from openai import AsyncOpenAI
+from pydantic import BaseModel, ValidationError
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 client = AsyncOpenAI(
     api_key=settings.LLM_API_KEY,
     base_url=settings.LLM_BASE_URL,
+    timeout=360000.0,
+    max_retries=0,
 )
+
+_chat = ChatOpenAI(
+    model=settings.LLM_MODEL,
+    base_url=settings.LLM_BASE_URL,
+    api_key=settings.LLM_API_KEY,
+    timeout=360000.0,
+    max_retries=0,
+)
+
+T = TypeVar("T", bound=BaseModel)
+
+
+def _strip_think(text: str) -> str:
+    return re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
+
+
+def _extract_json_obj(text: str) -> str | None:
+    """從文字中抓第一組 balanced JSON object（處理巢狀 {}）。"""
+    text = _strip_think(text)
+    # 優先匹配 ```json ... ``` code fence
+    fence = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
+    if fence:
+        return fence.group(1)
+    # balanced brace scan
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+async def structured_call(
+    schema: Type[T],
+    system: str,
+    user: str | list,
+    max_tokens: int = 8192,
+) -> T:
+    """用 LangChain with_structured_output 拿結構化輸出。
+    策略：先試 function_calling（tool call），失敗則退回手動 JSON 解析。
+    對 Ollama / thinking model 也能穩定工作。
+    """
+    chat = _chat.bind(max_tokens=max_tokens)
+
+    # Pass 1: tool calling with include_raw to inspect failures
+    try:
+        structured = chat.with_structured_output(
+            schema, method="function_calling", include_raw=True
+        )
+        result = await structured.ainvoke([
+            SystemMessage(content=system),
+            HumanMessage(content=user),
+        ])
+        parsed = result.get("parsed") if isinstance(result, dict) else result
+        if parsed is not None:
+            return parsed
+        raw_msg: AIMessage | None = result.get("raw") if isinstance(result, dict) else None
+        raw_text = raw_msg.content if raw_msg else ""
+        logger.warning("function_calling returned no parsed object; raw preview: %s", str(raw_text)[:300])
+    except Exception as e:
+        logger.warning("function_calling path failed: %s", e)
+        raw_text = ""
+
+    # Pass 2: force JSON in prompt + manual parse
+    fallback_system = (
+        f"{system}\n\n"
+        "請嚴格以 JSON 回傳，符合以下 schema，不要加 markdown code fence 以外的文字：\n"
+        f"{json.dumps(schema.model_json_schema(), ensure_ascii=False)}"
+    )
+    user_text = _flatten_content(user) if not isinstance(user, str) else user
+    raw_text = await call_llm(
+        system=fallback_system,
+        messages=[{"role": "user", "content": user_text}],
+        max_tokens=max_tokens,
+    )
+    obj_str = _extract_json_obj(raw_text)
+    if not obj_str:
+        raise ValueError(f"No JSON object found in LLM output. preview: {raw_text[:300]}")
+    try:
+        data = json.loads(obj_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSON decode failed: {e}. preview: {obj_str[:300]}") from e
+    try:
+        return schema.model_validate(data)
+    except ValidationError as e:
+        raise ValueError(f"Schema validation failed: {e}. data: {str(data)[:300]}") from e
 
 
 def _flatten_content(content: str | list) -> str:
@@ -43,6 +160,37 @@ async def call_llm(
         messages=[{"role": "system", "content": system}, *normalized],
     )
     return response.choices[0].message.content or ""
+
+
+async def stream_llm(
+    system: str,
+    messages: list[dict],
+    max_tokens: int = 4096,
+) -> AsyncIterator[str]:
+    """串流呼叫 LLM，yield 每個 content delta。
+    包含 thinking model 的 <think>...</think> 區塊內容。
+    """
+    normalized = [
+        {**msg, "content": _flatten_content(msg["content"])}
+        for msg in messages
+    ]
+    stream = await client.chat.completions.create(
+        model=settings.LLM_MODEL,
+        max_tokens=max_tokens,
+        messages=[{"role": "system", "content": system}, *normalized],
+        stream=True,
+    )
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        # 同時支援 content 與 reasoning_content（某些 Ollama / DeepSeek 實作）
+        content = getattr(delta, "content", None)
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning:
+            yield f"<think>{reasoning}</think>"
+        if content:
+            yield content
 
 
 def encode_image_b64(file_path: str) -> tuple[str, str]:

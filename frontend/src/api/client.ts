@@ -52,6 +52,20 @@ export async function listDocuments(): Promise<Document[]> {
   return res.data
 }
 
+export async function retryDocument(id: string): Promise<Document> {
+  const res = await api.post(`/documents/${id}/retry`)
+  return res.data
+}
+
+export async function deleteDocument(id: string, deletePages = true): Promise<{ deleted_document_id: string; pages_deleted: number }> {
+  const res = await api.delete(`/documents/${id}`, { params: { delete_pages: deletePages } })
+  return res.data
+}
+
+export async function deleteWikiPage(id: string): Promise<void> {
+  await api.delete(`/wiki/pages/${id}`)
+}
+
 // ── Wiki ────────────────────────────────────────────────
 export interface WikiPageSummary {
   id: string
@@ -101,4 +115,49 @@ export interface QueryResult {
 export async function queryWiki(question: string, saveToWiki: boolean): Promise<QueryResult> {
   const res = await api.post('/query', { question, save_to_wiki: saveToWiki })
   return res.data
+}
+
+export type QueryStreamEvent =
+  | { type: 'pages'; pages: { id: string; title: string; slug: string }[] }
+  | { type: 'chunk'; content: string }
+  | { type: 'judge'; save: boolean; reason: string }
+  | { type: 'done'; saved_page: { id: string; title: string; slug: string } | null }
+  | { type: 'error'; message: string }
+
+export async function* queryWikiStream(
+  question: string,
+): AsyncGenerator<QueryStreamEvent> {
+  const res = await fetch('/api/v1/query/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': getStoredApiKey(),
+    },
+    body: JSON.stringify({ question }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  if (!res.body) throw new Error('No response body')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        yield JSON.parse(line) as QueryStreamEvent
+      } catch {
+        // 忽略非法 JSON 行
+      }
+    }
+  }
+  if (buffer.trim()) {
+    try { yield JSON.parse(buffer) as QueryStreamEvent } catch {}
+  }
 }
