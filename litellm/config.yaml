@@ -1,6 +1,6 @@
 litellm_settings:
   drop_params: true
-  request_timeout: 600
+  request_timeout: 1800
   num_retries: 0
 
 general_settings:

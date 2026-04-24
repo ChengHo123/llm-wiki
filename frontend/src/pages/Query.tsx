@@ -4,6 +4,14 @@ import remarkGfm from 'remark-gfm'
 import { Send, BookmarkPlus, BookmarkX, BookOpen, Loader2, Brain, ChevronDown, ChevronRight } from 'lucide-react'
 import { queryWikiStream } from '../api/client'
 
+interface RefineEdit {
+  action: 'update' | 'create'
+  slug: string
+  title: string
+  page_type: 'entity' | 'concept'
+  reason: string
+}
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
@@ -12,7 +20,8 @@ interface Message {
   referenced_pages?: { id: string; title: string; slug: string }[]
   judge_save?: boolean
   judge_reason?: string
-  saved_page?: { id: string; title: string; slug: string } | null
+  refine_edits?: RefineEdit[]
+  refine_summary?: string
   streaming?: boolean
 }
 
@@ -118,14 +127,21 @@ export default function QueryPage() {
             }
             return copy
           })
-        } else if (ev.type === 'done') {
+        } else if (ev.type === 'refine') {
           setMessages((prev) => {
             const copy = [...prev]
             const last = copy[copy.length - 1]
             if (last?.role === 'assistant') {
-              last.saved_page = ev.saved_page
-              last.streaming = false
+              last.refine_edits = ev.edits
+              last.refine_summary = ev.summary
             }
+            return copy
+          })
+        } else if (ev.type === 'done') {
+          setMessages((prev) => {
+            const copy = [...prev]
+            const last = copy[copy.length - 1]
+            if (last?.role === 'assistant') last.streaming = false
             return copy
           })
         } else if (ev.type === 'error') {
@@ -212,12 +228,37 @@ export default function QueryPage() {
                     >
                       {msg.judge_save ? <BookmarkPlus size={12} className="mt-0.5 shrink-0" /> : <BookmarkX size={12} className="mt-0.5 shrink-0" />}
                       <span>
-                        {msg.judge_save
-                          ? `已存入 Wiki${msg.saved_page ? `：${msg.saved_page.title}` : ''}`
-                          : '未存入 Wiki'}
+                        {msg.judge_save ? '判斷：值得整合' : '未整合'}
                         {msg.judge_reason && <span className="text-gray-400"> — {msg.judge_reason}</span>}
                       </span>
                     </div>
+                  )}
+
+                  {msg.refine_edits && msg.refine_edits.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-gray-100">
+                      <p className="text-xs text-gray-500 mb-1">策展結果：</p>
+                      <ul className="space-y-1">
+                        {msg.refine_edits.map((e, i) => (
+                          <li key={i} className="text-xs flex items-start gap-1.5">
+                            <span
+                              className={`px-1.5 py-0.5 rounded font-mono shrink-0 ${
+                                e.action === 'update'
+                                  ? 'bg-blue-50 text-blue-600'
+                                  : 'bg-green-50 text-green-600'
+                              }`}
+                            >
+                              {e.action}
+                            </span>
+                            <span className="text-gray-700 font-medium">{e.title}</span>
+                            <span className="text-gray-400 truncate">— {e.reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {msg.judge_save && msg.refine_edits && msg.refine_edits.length === 0 && msg.refine_summary && (
+                    <div className="mt-1 text-xs text-gray-400">{msg.refine_summary}</div>
                   )}
                 </div>
               )}

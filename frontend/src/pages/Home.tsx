@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Key, Upload, FileText, CheckCircle, XCircle, Clock, RefreshCw, Trash2, RotateCcw } from 'lucide-react'
+import { Key, Upload, FileText, CheckCircle, XCircle, Clock, RefreshCw, Trash2, RotateCcw, Check } from 'lucide-react'
 import {
-  createApiKey, uploadDocument, listDocuments, deleteDocument, retryDocument,
-  getStoredApiKey, setStoredApiKey, clearStoredApiKey,
-  type Document,
+  createApiKey, uploadDocument, listDocuments, deleteDocument, retryDocument, whoAmI,
+  getStoredApiKey, clearStoredApiKey,
+  listStoredKeys, addStoredKey, selectStoredKey, removeStoredKey, getActiveKeyName,
+  type Document, type StoredKey,
 } from '../api/client'
 
 const STATUS_ICON: Record<string, JSX.Element> = {
@@ -25,11 +26,21 @@ const STATUS_LABEL: Record<string, string> = {
 
 export default function HomePage() {
   const [apiKey, setApiKey] = useState(getStoredApiKey())
+  const [activeName, setActiveName] = useState(getActiveKeyName())
+  const [keyList, setKeyList] = useState<StoredKey[]>(listStoredKeys())
   const [keyName, setKeyName] = useState('')
   const [newKey, setNewKey] = useState('')
+  const [loginKey, setLoginKey] = useState('')
+  const [loggingIn, setLoggingIn] = useState(false)
   const [docs, setDocs] = useState<Document[]>([])
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+
+  const refreshKeyState = () => {
+    setApiKey(getStoredApiKey())
+    setActiveName(getActiveKeyName())
+    setKeyList(listStoredKeys())
+  }
 
   const loadDocs = useCallback(async () => {
     if (!getStoredApiKey()) return
@@ -49,15 +60,51 @@ export default function HomePage() {
   }, [docs, loadDocs])
 
   const handleCreateKey = async () => {
-    if (!keyName.trim()) return
+    const name = keyName.trim()
+    if (!name) return
     try {
-      const res = await createApiKey(keyName)
+      const res = await createApiKey(name)
       setNewKey(res.key)
-      setStoredApiKey(res.key)
-      setApiKey(res.key)
+      addStoredKey(name, res.key)
+      setKeyName('')
+      refreshKeyState()
       loadDocs()
     } catch (e: any) {
       setError(e.response?.data?.detail || '建立失敗')
+    }
+  }
+
+  const handleSelectKey = (name: string) => {
+    if (!selectStoredKey(name)) return
+    setNewKey('')
+    refreshKeyState()
+    loadDocs()
+  }
+
+  const handleRemoveKey = (name: string) => {
+    if (!confirm(`從瀏覽器移除「${name}」？（後端 key 仍有效，不會刪除資料）`)) return
+    removeStoredKey(name)
+    refreshKeyState()
+    if (getActiveKeyName() === '') setDocs([])
+  }
+
+  const handleLogin = async () => {
+    const key = loginKey.trim()
+    if (!key) return
+    setLoggingIn(true)
+    setError('')
+    try {
+      const info = await whoAmI(key)
+      addStoredKey(info.name, key)
+      setLoginKey('')
+      refreshKeyState()
+      loadDocs()
+    } catch (e: any) {
+      setError(e.response?.status === 401 || e.response?.status === 403
+        ? '無效的 API Key'
+        : (e.response?.data?.detail || '登入失敗'))
+    } finally {
+      setLoggingIn(false)
     }
   }
 
@@ -98,27 +145,53 @@ export default function HomePage() {
           <h2 className="font-semibold text-gray-700">API Key</h2>
         </div>
 
-        {apiKey ? (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-              <CheckCircle size={14} className="text-green-500" />
-              <span className="text-sm text-green-700 font-mono truncate">{apiKey}</span>
-            </div>
-            <button
-              onClick={() => { clearStoredApiKey(); setApiKey(''); setDocs([]) }}
-              className="text-xs text-red-500 hover:text-red-700"
-            >
-              清除 Key
-            </button>
+        {newKey && (
+          <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-3 mb-3">
+            <p className="text-xs text-yellow-700 mb-1 font-semibold">新 Key 已建立，請複製並儲存（之後不會再顯示）</p>
+            <p className="font-mono text-sm break-all text-yellow-900">{newKey}</p>
           </div>
-        ) : (
-          <div className="space-y-3">
-            {newKey && (
-              <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-3">
-                <p className="text-xs text-yellow-700 mb-1 font-semibold">請複製並儲存此 Key（之後不會再顯示）</p>
-                <p className="font-mono text-sm break-all text-yellow-900">{newKey}</p>
-              </div>
-            )}
+        )}
+
+        {keyList.length > 0 && (
+          <div className="mb-4">
+            <p className="text-xs text-gray-500 mb-2">已儲存的 Keys（點擊切換）：</p>
+            <ul className="space-y-1">
+              {keyList.map((k) => {
+                const isActive = k.name === activeName
+                return (
+                  <li
+                    key={k.name}
+                    className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm border ${
+                      isActive
+                        ? 'bg-green-50 border-green-300'
+                        : 'bg-gray-50 border-gray-200 hover:bg-gray-100 cursor-pointer'
+                    }`}
+                    onClick={() => !isActive && handleSelectKey(k.name)}
+                  >
+                    {isActive ? (
+                      <Check size={14} className="text-green-500 shrink-0" />
+                    ) : (
+                      <span className="w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0" />
+                    )}
+                    <span className="font-medium text-gray-700 shrink-0">{k.name}</span>
+                    <span className="text-xs text-gray-400 font-mono truncate flex-1">{k.key}</span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleRemoveKey(k.name) }}
+                      className="text-gray-300 hover:text-red-500 shrink-0"
+                      title="從瀏覽器移除"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <p className="text-xs text-gray-500 mb-1">建立新 Key：</p>
             <div className="flex gap-2">
               <input
                 value={keyName}
@@ -134,16 +207,39 @@ export default function HomePage() {
                 建立
               </button>
             </div>
-            <p className="text-xs text-gray-400">或直接輸入已有的 API Key：</p>
+          </div>
+
+          <div>
+            <p className="text-xs text-gray-500 mb-1">使用已有 Key 登入：</p>
             <div className="flex gap-2">
               <input
+                value={loginKey}
+                onChange={(e) => setLoginKey(e.target.value)}
                 placeholder="wk_..."
+                type="password"
                 className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
-                onBlur={(e) => { if (e.target.value) { setStoredApiKey(e.target.value); setApiKey(e.target.value); loadDocs() } }}
+                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                disabled={loggingIn}
               />
+              <button
+                onClick={handleLogin}
+                disabled={loggingIn || !loginKey.trim()}
+                className="bg-gray-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-800 disabled:opacity-40"
+              >
+                {loggingIn ? '驗證中...' : '登入'}
+              </button>
             </div>
           </div>
-        )}
+
+          {apiKey && (
+            <button
+              onClick={() => { clearStoredApiKey(); refreshKeyState(); setDocs([]) }}
+              className="text-xs text-gray-400 hover:text-red-500"
+            >
+              取消目前選擇（不刪除儲存的 keys）
+            </button>
+          )}
+        </div>
       </section>
 
       {/* 上傳區塊 */}

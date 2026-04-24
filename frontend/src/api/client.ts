@@ -1,6 +1,32 @@
 import axios from 'axios'
 
 const API_KEY_STORAGE = 'llm_wiki_api_key'
+const KEY_LIST_STORAGE = 'llm_wiki_key_list'
+const ACTIVE_KEY_NAME_STORAGE = 'llm_wiki_active_key_name'
+
+export interface StoredKey {
+  name: string
+  key: string
+}
+
+export function listStoredKeys(): StoredKey[] {
+  try {
+    const raw = localStorage.getItem(KEY_LIST_STORAGE)
+    if (!raw) return []
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? arr.filter((x) => x?.name && x?.key) : []
+  } catch {
+    return []
+  }
+}
+
+function saveKeyList(list: StoredKey[]) {
+  localStorage.setItem(KEY_LIST_STORAGE, JSON.stringify(list))
+}
+
+export function getActiveKeyName(): string {
+  return localStorage.getItem(ACTIVE_KEY_NAME_STORAGE) || ''
+}
 
 export function getStoredApiKey(): string {
   return localStorage.getItem(API_KEY_STORAGE) || ''
@@ -10,8 +36,35 @@ export function setStoredApiKey(key: string) {
   localStorage.setItem(API_KEY_STORAGE, key)
 }
 
+export function addStoredKey(name: string, key: string) {
+  const list = listStoredKeys()
+  const idx = list.findIndex((k) => k.name === name)
+  if (idx >= 0) list[idx] = { name, key }
+  else list.push({ name, key })
+  saveKeyList(list)
+  selectStoredKey(name)
+}
+
+export function selectStoredKey(name: string): boolean {
+  const entry = listStoredKeys().find((k) => k.name === name)
+  if (!entry) return false
+  localStorage.setItem(API_KEY_STORAGE, entry.key)
+  localStorage.setItem(ACTIVE_KEY_NAME_STORAGE, name)
+  return true
+}
+
+export function removeStoredKey(name: string) {
+  const list = listStoredKeys().filter((k) => k.name !== name)
+  saveKeyList(list)
+  if (getActiveKeyName() === name) {
+    localStorage.removeItem(API_KEY_STORAGE)
+    localStorage.removeItem(ACTIVE_KEY_NAME_STORAGE)
+  }
+}
+
 export function clearStoredApiKey() {
   localStorage.removeItem(API_KEY_STORAGE)
+  localStorage.removeItem(ACTIVE_KEY_NAME_STORAGE)
 }
 
 const api = axios.create({
@@ -28,6 +81,13 @@ api.interceptors.request.use((config) => {
 export async function createApiKey(name: string) {
   const res = await api.post('/keys', { name })
   return res.data as { key: string; name: string; message: string }
+}
+
+export async function whoAmI(rawKey: string): Promise<{ name: string }> {
+  const res = await axios.get('/api/v1/keys/me', {
+    headers: { 'X-API-Key': rawKey },
+  })
+  return res.data
 }
 
 // ── Documents ───────────────────────────────────────────
@@ -117,11 +177,20 @@ export async function queryWiki(question: string, saveToWiki: boolean): Promise<
   return res.data
 }
 
+export interface RefineEdit {
+  action: 'update' | 'create'
+  slug: string
+  title: string
+  page_type: 'entity' | 'concept'
+  reason: string
+}
+
 export type QueryStreamEvent =
   | { type: 'pages'; pages: { id: string; title: string; slug: string }[] }
   | { type: 'chunk'; content: string }
   | { type: 'judge'; save: boolean; reason: string }
-  | { type: 'done'; saved_page: { id: string; title: string; slug: string } | null }
+  | { type: 'refine'; edits: RefineEdit[]; summary: string }
+  | { type: 'done' }
   | { type: 'error'; message: string }
 
 export async function* queryWikiStream(

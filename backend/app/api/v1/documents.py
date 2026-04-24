@@ -53,12 +53,23 @@ async def upload_document(
         select(func.count(WikiPage.id)).where(WikiPage.api_key_id == api_key.id)
     )
     current_pages = count_result.scalar_one()
-    if current_pages >= settings.MAX_WIKI_PAGES:
+
+    pending_result = await db.execute(
+        select(func.count(Document.id)).where(
+            Document.api_key_id == api_key.id,
+            Document.status.in_(["queued", "processing"]),
+        )
+    )
+    pending_docs = pending_result.scalar_one()
+
+    projected = current_pages + pending_docs * settings.EST_PAGES_PER_DOC + settings.EST_PAGES_PER_DOC
+    if projected > settings.MAX_WIKI_PAGES:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Wiki 已達 {settings.MAX_WIKI_PAGES} 頁上限（目前 {current_pages} 頁）。"
-                "為避免查詢漏頁，請先刪除既有文件或調高 MAX_WIKI_PAGES。"
+                f"Wiki 預估將達 {projected} 頁，超過 {settings.MAX_WIKI_PAGES} 頁上限"
+                f"（目前 {current_pages} 頁，排隊中 {pending_docs} 份 x 預估 {settings.EST_PAGES_PER_DOC} 頁）。"
+                "請等排隊完成、刪既有文件，或調高 MAX_WIKI_PAGES。"
             ),
         )
 
