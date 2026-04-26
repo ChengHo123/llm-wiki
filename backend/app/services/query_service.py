@@ -273,8 +273,9 @@ async def run_query(
     api_key_id: uuid.UUID,
     db: AsyncSession,
     save_to_wiki: bool = False,
+    persona: str = "",
 ) -> dict:
-    """執行查詢流程"""
+    """執行查詢流程。persona 會附加在 system prompt 之後，可用來指定角色口吻。"""
     # 取所有頁面標題，讓 LLM 決定哪些相關
     all_result = await db.execute(
         select(WikiPage).where(WikiPage.api_key_id == api_key_id)
@@ -289,6 +290,8 @@ async def run_query(
     )
 
     system = f"{QUERY_SYSTEM_PROMPT}\n\n<wiki>\n{wiki_context}\n</wiki>"
+    if persona:
+        system = f"{system}\n\n<persona>\n{persona}\n</persona>"
 
     answer = await call_llm(
         system=system,

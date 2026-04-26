@@ -130,7 +130,7 @@ async def run_ingest(document_id: uuid.UUID) -> None:
                 schema=IngestResult,
                 system=INGEST_SYSTEM_PROMPT,
                 user=msg["content"],
-                max_tokens=32768,
+                max_tokens=16384,
             )
             data = result.model_dump()
 
