@@ -9,7 +9,7 @@ from app.models.api_key import ApiKey
 from app.models.wiki_page import WikiPage
 from app.models.wiki_link import WikiLink
 from app.core.security import get_current_key
-from app.services.lint import run_lint
+from app.services.lint import run_lint, apply_lint_fixes
 
 router = APIRouter()
 
@@ -151,3 +151,29 @@ async def lint_wiki(
 ):
     """觸發 wiki 健檢，回傳問題報告"""
     return await run_lint(api_key.id, db)
+
+
+class LintIssue(BaseModel):
+    type: str | None = None
+    severity: str | None = None
+    page_slug: str
+    description: str | None = None
+    suggestion: str | None = None
+
+
+class LintApplyRequest(BaseModel):
+    issues: list[LintIssue]
+
+
+@router.post("/wiki/lint/apply")
+async def apply_lint(
+    req: LintApplyRequest,
+    api_key: ApiKey = Depends(get_current_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """依 issues 改寫對應頁面。單一 issue 或批次皆可。"""
+    return await apply_lint_fixes(
+        api_key.id,
+        [i.model_dump() for i in req.issues],
+        db,
+    )

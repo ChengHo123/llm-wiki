@@ -165,6 +165,24 @@ export async function lintWiki() {
   return res.data
 }
 
+export interface LintIssue {
+  type?: string
+  severity?: string
+  page_slug: string
+  description?: string
+  suggestion?: string
+}
+
+export interface LintApplyResult {
+  applied: { page_slug: string; page_id: string; title: string; issues_addressed: number }[]
+  skipped: { page_slug: string; reason: string }[]
+}
+
+export async function applyLintFixes(issues: LintIssue[]): Promise<LintApplyResult> {
+  const res = await api.post('/wiki/lint/apply', { issues })
+  return res.data
+}
+
 // ── Query ───────────────────────────────────────────────
 export interface QueryResult {
   answer: string

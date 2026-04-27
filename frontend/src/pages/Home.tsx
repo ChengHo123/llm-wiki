@@ -53,7 +53,7 @@ export default function HomePage() {
 
   // 輪詢進行中的文件
   useEffect(() => {
-    const hasPending = docs.some((d) => d.status === 'processing' || d.status === 'pending')
+    const hasPending = docs.some((d) => d.status === 'processing' || d.status === 'pending' || d.status === 'queued')
     if (!hasPending) return
     const t = setInterval(loadDocs, 3000)
     return () => clearInterval(t)

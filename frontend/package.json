@@ -18,7 +18,8 @@
     "react-dropzone": "^14.2.9",
     "lucide-react": "^0.447.0",
     "react-force-graph-2d": "^1.25.5",
-    "d3-color": "^3.1.0"
+    "d3-color": "^3.1.0",
+    "html-to-image": "^1.11.11"
   },
   "devDependencies": {
     "@types/react": "^18.3.11",

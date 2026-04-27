@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, ChevronLeft, AlertTriangle, RefreshCw, Trash2 } from 'lucide-react'
-import { listWikiPages, getWikiPage, lintWiki, deleteWikiPage, type WikiPageSummary, type WikiPageDetail } from '../api/client'
+import { BookOpen, ChevronLeft, AlertTriangle, RefreshCw, Trash2, Wand2, Loader2 } from 'lucide-react'
+import { listWikiPages, getWikiPage, lintWiki, deleteWikiPage, applyLintFixes, type WikiPageSummary, type WikiPageDetail, type LintIssue } from '../api/client'
 
 const PAGE_TYPE_COLOR: Record<string, string> = {
   index: 'bg-purple-100 text-purple-700',
@@ -17,6 +17,8 @@ export default function WikiPage() {
   const [loading, setLoading] = useState(false)
   const [lintReport, setLintReport] = useState<any>(null)
   const [linting, setLinting] = useState(false)
+  const [applying, setApplying] = useState<number | 'all' | null>(null)
+  const [applyResult, setApplyResult] = useState<{ applied: number; skipped: number } | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -37,6 +39,7 @@ export default function WikiPage() {
 
   const handleLint = async () => {
     setLinting(true)
+    setApplyResult(null)
     try {
       setLintReport(await lintWiki())
     } catch {
@@ -44,6 +47,36 @@ export default function WikiPage() {
     } finally {
       setLinting(false)
     }
+  }
+
+  const runApply = async (issues: LintIssue[], key: number | 'all') => {
+    if (!issues.length || applying !== null) return
+    setApplying(key)
+    setError('')
+    try {
+      const result = await applyLintFixes(issues)
+      setApplyResult({ applied: result.applied.length, skipped: result.skipped.length })
+      setPages(await listWikiPages())
+      if (key === 'all') {
+        setLintReport(null)
+      } else if (lintReport?.issues) {
+        setLintReport({
+          ...lintReport,
+          issues: lintReport.issues.filter((_: any, i: number) => i !== key),
+          stats: { ...lintReport.stats, issues_found: Math.max(0, (lintReport.stats?.issues_found || 1) - 1) },
+        })
+      }
+    } catch {
+      setError('套用失敗')
+    } finally {
+      setApplying(null)
+    }
+  }
+
+  const handleApplyAll = () => {
+    if (!lintReport?.issues?.length) return
+    if (!confirm(`將對 ${lintReport.issues.length} 個 issue 呼叫 LLM 批次改寫對應頁面，原內容會被覆寫。確定？`)) return
+    runApply(lintReport.issues as LintIssue[], 'all')
   }
 
   if (selected) {
@@ -105,9 +138,27 @@ export default function WikiPage() {
         <p className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
       )}
 
+      {applyResult && (
+        <div className="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          已套用 {applyResult.applied} 頁{applyResult.skipped > 0 ? `，略過 ${applyResult.skipped}` : ''}。可重新執行健檢驗證。
+        </div>
+      )}
+
       {lintReport && (
         <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4">
-          <h3 className="font-semibold text-amber-800 mb-2">健檢報告</h3>
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <h3 className="font-semibold text-amber-800">健檢報告</h3>
+            {lintReport.issues?.length > 0 && (
+              <button
+                onClick={handleApplyAll}
+                disabled={applying !== null}
+                className="flex items-center gap-1.5 text-xs bg-amber-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-amber-700 disabled:opacity-50"
+              >
+                {applying === 'all' ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                自動修復全部
+              </button>
+            )}
+          </div>
           <p className="text-sm text-amber-700 mb-3">{lintReport.summary}</p>
           <div className="flex gap-4 text-xs text-amber-600 mb-3">
             <span>總頁數：{lintReport.stats?.total_pages}</span>
@@ -115,14 +166,30 @@ export default function WikiPage() {
             <span>問題數：{lintReport.stats?.issues_found}</span>
           </div>
           {lintReport.issues?.length > 0 && (
-            <ul className="space-y-2">
-              {lintReport.issues.slice(0, 5).map((issue: any, i: number) => (
-                <li key={i} className="text-xs bg-white rounded p-2 border border-amber-200">
-                  <span className={`font-medium ${issue.severity === 'high' ? 'text-red-600' : issue.severity === 'medium' ? 'text-orange-600' : 'text-yellow-600'}`}>
-                    [{issue.severity}]
-                  </span>{' '}
-                  <span className="text-gray-700">{issue.description}</span>
-                  {issue.suggestion && <p className="text-gray-500 mt-1">建議：{issue.suggestion}</p>}
+            <ul className="space-y-2 max-h-96 overflow-y-auto">
+              {lintReport.issues.map((issue: any, i: number) => (
+                <li key={i} className="text-xs bg-white rounded p-2 border border-amber-200 flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div>
+                      <span className={`font-medium ${issue.severity === 'high' ? 'text-red-600' : issue.severity === 'medium' ? 'text-orange-600' : 'text-yellow-600'}`}>
+                        [{issue.severity}]
+                      </span>{' '}
+                      <span className="text-gray-400">{issue.page_slug}</span>{' '}
+                      <span className="text-gray-700">{issue.description}</span>
+                    </div>
+                    {issue.suggestion && <p className="text-gray-500 mt-1">建議：{issue.suggestion}</p>}
+                  </div>
+                  {issue.page_slug && (
+                    <button
+                      onClick={() => runApply([issue as LintIssue], i)}
+                      disabled={applying !== null}
+                      title="套用此建議"
+                      className="shrink-0 flex items-center gap-1 text-xs border border-amber-300 text-amber-700 px-2 py-1 rounded hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      {applying === i ? <Loader2 size={10} className="animate-spin" /> : <Wand2 size={10} />}
+                      套用
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

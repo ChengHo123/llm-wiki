@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Send, BookmarkPlus, BookmarkX, BookOpen, Loader2, Brain, ChevronDown, ChevronRight } from 'lucide-react'
+import { Send, BookmarkPlus, BookmarkX, BookOpen, Loader2, Brain, ChevronDown, ChevronRight, Camera } from 'lucide-react'
+import { toPng } from 'html-to-image'
 import { queryWikiStream } from '../api/client'
 
 interface RefineEdit {
@@ -75,7 +76,54 @@ export default function QueryPage() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [capturing, setCapturing] = useState<number | null>(null)
+  const [capturingAll, setCapturingAll] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const bubbleRefs = useRef<Record<number, HTMLDivElement | null>>({})
+  const conversationRef = useRef<HTMLDivElement>(null)
+
+  const handleCaptureAll = async () => {
+    const node = conversationRef.current
+    if (!node || messages.length === 0 || capturingAll) return
+    setCapturingAll(true)
+    try {
+      const dataUrl = await toPng(node, {
+        pixelRatio: 2,
+        backgroundColor: '#f9fafb',
+        cacheBust: true,
+        filter: (el) => !(el instanceof HTMLElement && el.dataset.captureHide === 'true'),
+      })
+      const link = document.createElement('a')
+      link.download = `wiki-conversation-${Date.now()}.png`
+      link.href = dataUrl
+      link.click()
+    } catch {
+      setError('截圖失敗')
+    } finally {
+      setCapturingAll(false)
+    }
+  }
+
+  const handleCapture = async (idx: number) => {
+    const node = bubbleRefs.current[idx]
+    if (!node) return
+    setCapturing(idx)
+    try {
+      const dataUrl = await toPng(node, {
+        pixelRatio: 2,
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+      })
+      const link = document.createElement('a')
+      link.download = `wiki-answer-${Date.now()}.png`
+      link.href = dataUrl
+      link.click()
+    } catch (e) {
+      setError('截圖失敗')
+    } finally {
+      setCapturing(null)
+    }
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -165,13 +213,25 @@ export default function QueryPage() {
     <div className="flex flex-col h-screen">
       <div className="p-4 border-b border-gray-200 bg-white flex items-center justify-between">
         <h1 className="font-semibold text-gray-800">查詢 Wiki</h1>
-        <span className="flex items-center gap-1.5 text-xs text-gray-500">
-          <Brain size={12} className="text-purple-500" />
-          自動判斷是否存入 Wiki
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1.5 text-xs text-gray-500">
+            <Brain size={12} className="text-purple-500" />
+            自動判斷是否存入 Wiki
+          </span>
+          <button
+            onClick={handleCaptureAll}
+            disabled={capturingAll || messages.length === 0}
+            title="截圖整段對話"
+            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:text-blue-600 hover:border-blue-300 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {capturingAll ? <Loader2 size={12} className="animate-spin" /> : <Camera size={12} />}
+            <span>截圖對話</span>
+          </button>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-6">
+        <div ref={conversationRef} className="space-y-4">
         {messages.length === 0 && (
           <div className="text-center py-16 text-gray-400">
             <BookOpen size={40} className="mx-auto mb-3 opacity-30" />
@@ -188,7 +248,11 @@ export default function QueryPage() {
                   {msg.content}
                 </div>
               ) : (
-                <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm p-4">
+                <div className="relative group">
+                  <div
+                    ref={(el) => { bubbleRefs.current[i] = el }}
+                    className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm p-4"
+                  >
                   {msg.thinking !== undefined && msg.thinking !== '' && (
                     <ThinkingBlock text={msg.thinking} done={!!msg.thinkingDone} />
                   )}
@@ -260,11 +324,25 @@ export default function QueryPage() {
                   {msg.judge_save && msg.refine_edits && msg.refine_edits.length === 0 && msg.refine_summary && (
                     <div className="mt-1 text-xs text-gray-400">{msg.refine_summary}</div>
                   )}
+                  </div>
+
+                  {!msg.streaming && msg.content && (
+                    <button
+                      onClick={() => handleCapture(i)}
+                      disabled={capturing === i}
+                      title="截圖存檔"
+                      data-capture-hide="true"
+                      className="absolute top-2 right-2 p-1.5 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-blue-600 hover:border-blue-300 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100"
+                    >
+                      {capturing === i ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
           </div>
         ))}
+        </div>
 
         {error && (
           <p className="text-center text-sm text-red-600">{error}</p>
