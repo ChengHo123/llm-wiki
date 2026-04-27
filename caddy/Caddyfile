@@ -1,0 +1,15 @@
+{
+	email {$LE_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+	# Frontend nginx already proxies /api/* to backend:8000, so we just front everything to it.
+	reverse_proxy frontend:80 {
+		# Cover the LLM ingest path which can take 30s+
+		transport http {
+			read_timeout 600s
+			write_timeout 600s
+		}
+	}
+}
