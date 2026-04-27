@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,13 +13,20 @@ from app.services.query_service import run_query, run_query_stream
 router = APIRouter()
 
 
+class HistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class QueryRequest(BaseModel):
     question: str
     save_to_wiki: bool = False  # 僅非串流端點使用
+    history: list[HistoryMessage] = []
 
 
 class QueryStreamRequest(BaseModel):
     question: str
+    history: list[HistoryMessage] = []
 
 
 class PageRef(BaseModel):
@@ -44,6 +53,7 @@ async def query_wiki(
         api_key_id=api_key.id,
         db=db,
         save_to_wiki=body.save_to_wiki,
+        history=[h.model_dump() for h in body.history],
     )
     return QueryResponse(**result)
 
@@ -61,6 +71,7 @@ async def query_wiki_stream(
             question=body.question,
             api_key_id=api_key.id,
             db=db,
+            history=[h.model_dump() for h in body.history],
         ),
         media_type="application/x-ndjson",
     )

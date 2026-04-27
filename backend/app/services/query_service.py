@@ -17,6 +17,11 @@ from app.core.config import get_settings
 settings = get_settings()
 
 
+class RouteDecision(BaseModel):
+    need_wiki: bool = Field(description="是否需要查 wiki 才能回答")
+    reason: str = Field(description="簡短判斷理由")
+
+
 class PageSelection(BaseModel):
     relevant_slugs: list[str] = Field(
         default_factory=list,
@@ -48,6 +53,25 @@ class RefinePlan(BaseModel):
         description="要套用的編輯列表；若 Q&A 無新資訊可整合則回傳空列表",
     )
     summary: str = Field(description="整體說明此 plan 做什麼（或為何 skip）")
+
+
+# Phase 0：路由 — 判斷此訊息是否需要查 wiki
+ROUTER_SYSTEM_PROMPT = """你是對話路由助手。判斷使用者訊息是否需要查 wiki 知識庫才能好好回答。
+
+判斷標準：
+- need_wiki=true：訊息問及 wiki 內可能存在的事實、人物、組織、概念、技術、專有名詞、定義、流程，或語意上明顯指涉某個列表中的條目
+- need_wiki=false：純閒聊、問候、感受、自我介紹、不相關的常識問題、玩笑、撒嬌
+
+如果使用者明確提到 wiki 標題列表中出現的任何詞、或語意相近的詞 → need_wiki=true
+如果列表為空，或訊息完全與列表內容無關 → need_wiki=false
+寧可在邊界情況下選 true（多查不傷，沒查到會誤事）。
+"""
+
+
+CHAT_ONLY_SYSTEM_PROMPT = """你正在跟使用者自然聊天，不需要查任何資料庫。
+不要假裝自己有 wiki，也不要在回答中提到任何頁面或連結。
+回答簡短、自然、貼近對話脈絡。
+"""
 
 
 # Phase 1：讓 LLM 從標題列表挑出相關頁面
@@ -201,6 +225,70 @@ async def judge_save_decision(
         return False, f"判斷失敗：{e}"
 
 
+def _trim_history(
+    history: list[dict] | None,
+    max_turns: int = 20,
+    max_chars: int = 800,
+) -> list[dict]:
+    """限制 history 規模避免 prompt 爆炸。預設保留最近 20 則 (10 turns)，每則 800 字。"""
+    if not history:
+        return []
+    out = []
+    for m in history[-max_turns:]:
+        role = m.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        content = (m.get("content") or "")[:max_chars]
+        if not content.strip():
+            continue
+        out.append({"role": role, "content": content})
+    return out
+
+
+async def route_query(
+    question: str,
+    all_pages: list[WikiPage],
+    history: list[dict] | None = None,
+) -> RouteDecision:
+    """Phase 0：判斷是否需要查 wiki。空 wiki / 路由失敗都直接走 chat-only。"""
+    if not all_pages:
+        return RouteDecision(need_wiki=False, reason="wiki 為空")
+    summary = "\n".join(
+        f"- {p.title} ({p.page_type})" for p in all_pages[:100]
+    )
+    history_text = ""
+    recent = (history or [])[-4:]  # 給 router 最近 2 turns 判斷代名詞 / 追問
+    if recent:
+        lines = "\n".join(f"{m['role']}: {m['content'][:200]}" for m in recent)
+        history_text = f"\n\n最近對話（脈絡用，幫忙判斷代名詞 / 追問是否承接 wiki 主題）：\n{lines}"
+    user_msg = f"使用者最新訊息：{question}{history_text}\n\nWiki 頁面列表：\n{summary}"
+    try:
+        return await structured_call(
+            schema=RouteDecision,
+            system=ROUTER_SYSTEM_PROMPT,
+            user=user_msg,
+            max_tokens=512,
+        )
+    except Exception as e:
+        # 路由失敗保守一點走 wiki path
+        return RouteDecision(need_wiki=True, reason=f"路由失敗：{e}")
+
+
+async def chat_only_reply(
+    question: str,
+    persona: str = "",
+    history: list[dict] | None = None,
+) -> str:
+    system = CHAT_ONLY_SYSTEM_PROMPT
+    if persona:
+        system = f"{system}\n\n<persona>\n{persona}\n</persona>"
+    return await call_llm(
+        system=system,
+        messages=[*(history or []), {"role": "user", "content": question}],
+        max_tokens=1024,
+    )
+
+
 def _keyword_match(question: str, pages: list[WikiPage], limit: int) -> list[WikiPage]:
     """以問題詞彙粗略比對 title+content，分數高者優先。"""
     tokens = [t for t in re.split(r"[\s,.，。、?？!！:：;；]+", question) if len(t) >= 2]
@@ -274,13 +362,35 @@ async def run_query(
     db: AsyncSession,
     save_to_wiki: bool = False,
     persona: str = "",
+    history: list[dict] | None = None,
 ) -> dict:
-    """執行查詢流程。persona 會附加在 system prompt 之後，可用來指定角色口吻。"""
+    """執行查詢流程。persona 會附加在 system prompt 之後，可用來指定角色口吻。
+    history: 最近的對話訊息 [{role, content}]，會傳給 LLM 提供脈絡。"""
+    history = _trim_history(history)
+
     # 取所有頁面標題，讓 LLM 決定哪些相關
     all_result = await db.execute(
         select(WikiPage).where(WikiPage.api_key_id == api_key_id)
     )
     all_pages = all_result.scalars().all()
+
+    # Phase 0：路由 — 不需查 wiki 直接走 chat-only
+    decision = await route_query(question, all_pages, history)
+    if not decision.need_wiki:
+        answer = await chat_only_reply(question, persona, history)
+        db.add(ActivityLog(
+            api_key_id=api_key_id,
+            action="chat",
+            details={"question": question, "route_reason": decision.reason},
+        ))
+        await db.commit()
+        return {
+            "answer": answer,
+            "referenced_pages": [],
+            "saved_page": None,
+            "route": {"need_wiki": False, "reason": decision.reason},
+        }
+
     pages = await select_relevant_pages(question, all_pages)
 
     # 建立 wiki context（供 prompt caching）
@@ -295,7 +405,7 @@ async def run_query(
 
     answer = await call_llm(
         system=system,
-        messages=[{"role": "user", "content": question}],
+        messages=[*history, {"role": "user", "content": question}],
         max_tokens=2048,
     )
 
@@ -364,6 +474,7 @@ async def run_query_stream(
     question: str,
     api_key_id: uuid.UUID,
     db: AsyncSession,
+    history: list[dict] | None = None,
 ) -> AsyncIterator[str]:
     """串流版 query：以 NDJSON 格式 yield 事件。
     流程：Phase 1 選頁 → Phase 2 串流回答 → Phase 3 判斷存 → Phase 4 策展整合
@@ -376,10 +487,38 @@ async def run_query_stream(
       - {"type":"error","message":"..."}                      錯誤
     """
     try:
+        history_clean = _trim_history(history)
+
         all_result = await db.execute(
             select(WikiPage).where(WikiPage.api_key_id == api_key_id)
         )
         all_pages = all_result.scalars().all()
+
+        # Phase 0：路由
+        decision = await route_query(question, all_pages, history_clean)
+        yield json.dumps({
+            "type": "route",
+            "need_wiki": decision.need_wiki,
+            "reason": decision.reason,
+        }) + "\n"
+
+        if not decision.need_wiki:
+            yield json.dumps({"type": "pages", "pages": []}) + "\n"
+            async for delta in stream_llm(
+                system=CHAT_ONLY_SYSTEM_PROMPT,
+                messages=[*history_clean, {"role": "user", "content": question}],
+                max_tokens=1024,
+            ):
+                yield json.dumps({"type": "chunk", "content": delta}) + "\n"
+            db.add(ActivityLog(
+                api_key_id=api_key_id,
+                action="chat",
+                details={"question": question, "route_reason": decision.reason},
+            ))
+            await db.commit()
+            yield json.dumps({"type": "done"}) + "\n"
+            return
+
         pages = await select_relevant_pages(question, all_pages)
 
         referenced_pages = [{"id": str(p.id), "title": p.title, "slug": p.slug} for p in pages]
@@ -394,7 +533,7 @@ async def run_query_stream(
         full_answer_parts: list[str] = []
         async for delta in stream_llm(
             system=system,
-            messages=[{"role": "user", "content": question}],
+            messages=[*history_clean, {"role": "user", "content": question}],
             max_tokens=4096,
         ):
             full_answer_parts.append(delta)

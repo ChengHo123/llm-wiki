@@ -220,6 +220,7 @@ export interface RefineEdit {
 }
 
 export type QueryStreamEvent =
+  | { type: 'route'; need_wiki: boolean; reason: string }
   | { type: 'pages'; pages: { id: string; title: string; slug: string }[] }
   | { type: 'chunk'; content: string }
   | { type: 'judge'; save: boolean; reason: string }
@@ -227,8 +228,14 @@ export type QueryStreamEvent =
   | { type: 'done' }
   | { type: 'error'; message: string }
 
+export interface ChatHistoryMsg {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export async function* queryWikiStream(
   question: string,
+  history: ChatHistoryMsg[] = [],
 ): AsyncGenerator<QueryStreamEvent> {
   const res = await fetch('/api/v1/query/stream', {
     method: 'POST',
@@ -236,7 +243,7 @@ export async function* queryWikiStream(
       'Content-Type': 'application/json',
       'X-API-Key': getStoredApiKey(),
     },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, history }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   if (!res.body) throw new Error('No response body')

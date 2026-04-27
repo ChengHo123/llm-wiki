@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Send, BookmarkPlus, BookmarkX, BookOpen, Loader2, Brain, ChevronDown, ChevronRight, Camera } from 'lucide-react'
+import { Send, BookmarkPlus, BookmarkX, BookOpen, Loader2, Brain, ChevronDown, ChevronRight, Camera, MessageCircle } from 'lucide-react'
 import { toPng } from 'html-to-image'
 import { queryWikiStream } from '../api/client'
 
@@ -24,6 +24,8 @@ interface Message {
   refine_edits?: RefineEdit[]
   refine_summary?: string
   streaming?: boolean
+  route_need_wiki?: boolean
+  route_reason?: string
 }
 
 function splitThinking(raw: string): { thinking: string; answer: string; thinkingDone: boolean } {
@@ -133,6 +135,12 @@ export default function QueryPage() {
     const question = input.trim()
     if (!question || loading) return
 
+    // 從現有 messages 抽出最近 20 則作為脈絡（送出前的快照）
+    const history = messages
+      .filter((m) => m.content && m.content.trim())
+      .slice(-20)
+      .map((m) => ({ role: m.role, content: m.content }))
+
     setInput('')
     setError('')
     setMessages((prev) => [
@@ -144,8 +152,18 @@ export default function QueryPage() {
 
     let rawBuffer = ''
     try {
-      for await (const ev of queryWikiStream(question)) {
-        if (ev.type === 'pages') {
+      for await (const ev of queryWikiStream(question, history)) {
+        if (ev.type === 'route') {
+          setMessages((prev) => {
+            const copy = [...prev]
+            const last = copy[copy.length - 1]
+            if (last?.role === 'assistant') {
+              last.route_need_wiki = ev.need_wiki
+              last.route_reason = ev.reason
+            }
+            return copy
+          })
+        } else if (ev.type === 'pages') {
           setMessages((prev) => {
             const copy = [...prev]
             const last = copy[copy.length - 1]
@@ -253,6 +271,14 @@ export default function QueryPage() {
                     ref={(el) => { bubbleRefs.current[i] = el }}
                     className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm p-4"
                   >
+                  {msg.route_need_wiki === false && (
+                    <div className="mb-2 inline-flex items-center gap-1 text-xs text-gray-500 bg-gray-50 border border-gray-200 px-2 py-0.5 rounded-full">
+                      <MessageCircle size={10} />
+                      <span>閒聊模式</span>
+                      {msg.route_reason && <span className="text-gray-400">— {msg.route_reason}</span>}
+                    </div>
+                  )}
+
                   {msg.thinking !== undefined && msg.thinking !== '' && (
                     <ThinkingBlock text={msg.thinking} done={!!msg.thinkingDone} />
                   )}
