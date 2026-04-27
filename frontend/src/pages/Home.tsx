@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Key, Upload, FileText, CheckCircle, XCircle, Clock, RefreshCw, Trash2, RotateCcw, Check } from 'lucide-react'
+import { Key, Upload, FileText, CheckCircle, XCircle, Clock, RefreshCw, Trash2, RotateCcw, Check, MessageCircle } from 'lucide-react'
 import {
   createApiKey, uploadDocument, listDocuments, deleteDocument, retryDocument, whoAmI,
+  startLinePair, pollLinePair,
   getStoredApiKey, clearStoredApiKey,
   listStoredKeys, addStoredKey, selectStoredKey, removeStoredKey, getActiveKeyName,
   type Document, type StoredKey,
@@ -32,6 +33,9 @@ export default function HomePage() {
   const [newKey, setNewKey] = useState('')
   const [loginKey, setLoginKey] = useState('')
   const [loggingIn, setLoggingIn] = useState(false)
+  const [lineCode, setLineCode] = useState('')
+  const [lineStatus, setLineStatus] = useState<'idle' | 'waiting' | 'expired'>('idle')
+  const linePollRef = useRef<number | null>(null)
   const [docs, setDocs] = useState<Document[]>([])
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
@@ -86,6 +90,52 @@ export default function HomePage() {
     removeStoredKey(name)
     refreshKeyState()
     if (getActiveKeyName() === '') setDocs([])
+  }
+
+  const stopLinePolling = () => {
+    if (linePollRef.current !== null) {
+      clearInterval(linePollRef.current)
+      linePollRef.current = null
+    }
+  }
+
+  useEffect(() => stopLinePolling, [])
+
+  const handleStartLineLogin = async () => {
+    setError('')
+    stopLinePolling()
+    try {
+      const { code } = await startLinePair()
+      setLineCode(code)
+      setLineStatus('waiting')
+      const startedAt = Date.now()
+      linePollRef.current = window.setInterval(async () => {
+        try {
+          const res = await pollLinePair(code)
+          if (res.status === 'redeemed' && res.api_key && res.name) {
+            stopLinePolling()
+            addStoredKey(res.name, res.api_key)
+            setLineCode('')
+            setLineStatus('idle')
+            refreshKeyState()
+            loadDocs()
+          } else if (res.status === 'expired' || Date.now() - startedAt > 300_000) {
+            stopLinePolling()
+            setLineStatus('expired')
+          }
+        } catch {
+          // 暫時失敗就繼續輪詢
+        }
+      }, 2000)
+    } catch (e: any) {
+      setError(e.response?.data?.detail || '無法產生配對碼')
+    }
+  }
+
+  const handleCancelLineLogin = () => {
+    stopLinePolling()
+    setLineCode('')
+    setLineStatus('idle')
   }
 
   const handleLogin = async () => {
@@ -229,6 +279,45 @@ export default function HomePage() {
                 {loggingIn ? '驗證中...' : '登入'}
               </button>
             </div>
+          </div>
+
+          <div>
+            <p className="text-xs text-gray-500 mb-1">用 LINE 登入：</p>
+            {lineStatus === 'idle' && (
+              <button
+                onClick={handleStartLineLogin}
+                className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700"
+              >
+                <MessageCircle size={14} />
+                產生配對碼
+              </button>
+            )}
+            {lineStatus === 'waiting' && (
+              <div className="border border-green-300 bg-green-50 rounded-lg p-3">
+                <p className="text-xs text-green-800 mb-2">在 LINE Bot 輸入下面這串訊息：</p>
+                <p className="font-mono text-lg font-bold text-green-900 mb-2 select-all">
+                  /login {lineCode}
+                </p>
+                <p className="text-xs text-gray-500 mb-2">5 分鐘內有效，登入成功後此頁會自動切換。</p>
+                <button
+                  onClick={handleCancelLineLogin}
+                  className="text-xs text-gray-500 hover:text-red-500"
+                >
+                  取消
+                </button>
+              </div>
+            )}
+            {lineStatus === 'expired' && (
+              <div className="border border-red-200 bg-red-50 rounded-lg p-3">
+                <p className="text-xs text-red-700 mb-2">配對碼已過期或無效。</p>
+                <button
+                  onClick={handleStartLineLogin}
+                  className="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700"
+                >
+                  重新產生
+                </button>
+              </div>
+            )}
           </div>
 
           {apiKey && (

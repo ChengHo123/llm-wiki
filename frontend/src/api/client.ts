@@ -90,6 +90,22 @@ export async function whoAmI(rawKey: string): Promise<{ name: string }> {
   return res.data
 }
 
+export async function startLinePair(): Promise<{ code: string; expires_in: number }> {
+  const res = await axios.post('/api/v1/auth/line-pair/start')
+  return res.data
+}
+
+export interface LinePairPollResult {
+  status: 'pending' | 'redeemed' | 'expired'
+  api_key?: string
+  name?: string
+}
+
+export async function pollLinePair(code: string): Promise<LinePairPollResult> {
+  const res = await axios.get('/api/v1/auth/line-pair/poll', { params: { code } })
+  return res.data
+}
+
 // ── Documents ───────────────────────────────────────────
 export interface Document {
   id: string
