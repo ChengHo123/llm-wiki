@@ -12,7 +12,7 @@ from app.models.document import Document
 from app.models.wiki_page import WikiPage
 from app.models.wiki_link import WikiLink
 from app.models.activity_log import ActivityLog
-from app.services.llm import structured_call, build_document_message
+from app.services.llm import structured_call, vision_structured_call, build_document_message
 from app.core.config import get_settings
 
 
@@ -351,16 +351,21 @@ async def run_ingest(document_id: uuid.UUID) -> None:
                     if existing_context:
                         msg["content"].insert(0, {"type": "text", "text": existing_context})
                     user_content = msg["content"]
+                    single_result: IngestResult = await vision_structured_call(
+                        schema=IngestResult,
+                        system=INGEST_SYSTEM_PROMPT,
+                        user_content=user_content,
+                        max_tokens=16384,
+                    )
                 else:
                     prefix = f"{existing_context}\n\n" if existing_context else ""
                     user_content = f"{prefix}文件名稱: {doc.filename}\n\n{full_text}"
-
-                single_result: IngestResult = await structured_call(
-                    schema=IngestResult,
-                    system=INGEST_SYSTEM_PROMPT,
-                    user=user_content,
-                    max_tokens=32768,
-                )
+                    single_result = await structured_call(
+                        schema=IngestResult,
+                        system=INGEST_SYSTEM_PROMPT,
+                        user=user_content,
+                        max_tokens=32768,
+                    )
                 data = single_result.model_dump()
                 doc_summary = data.get("summary", "")
                 all_pages_created = await _apply_ingest_result(

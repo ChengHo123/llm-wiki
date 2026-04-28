@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     EST_PAGES_PER_DOC: int = 12  # 預估單份文件 ingest 產出頁數；用於排隊中文件的預留估算
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
+    # Vision model（圖片 ingest 用，走 LiteLLM "vision" alias）
+    VISION_MODEL: str = "vision"
+
     # LINE Bot
     LINE_CHANNEL_SECRET: str = ""
     LINE_CHANNEL_ACCESS_TOKEN: str = ""

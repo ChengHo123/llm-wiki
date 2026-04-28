@@ -193,20 +193,63 @@ async def stream_llm(
             yield content
 
 
+VISION_MAX_PX = 1568  # 超過此邊長就縮圖，減少 token 用量
+
+
 def encode_image_b64(file_path: str) -> tuple[str, str]:
-    """將圖片編碼為 base64，回傳 (base64_data_url, media_type)"""
+    """將圖片縮圖（若過大）後編碼為 base64，回傳 (base64_data, media_type)。
+    縮圖至短邊不超過 VISION_MAX_PX，輸出 JPEG（大小最小化）。
+    """
+    from PIL import Image
+    import io
+
     suffix = Path(file_path).suffix.lower()
-    media_type_map = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-    }
-    media_type = media_type_map.get(suffix, "image/png")
-    with open(file_path, "rb") as f:
-        data = base64.standard_b64encode(f.read()).decode("utf-8")
-    return data, media_type
+    img = Image.open(file_path).convert("RGB")
+    w, h = img.size
+    if max(w, h) > VISION_MAX_PX:
+        scale = VISION_MAX_PX / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+    return data, "image/jpeg"
+
+
+async def vision_structured_call(
+    schema: Type[T],
+    system: str,
+    user_content: list,
+    max_tokens: int = 16384,
+) -> T:
+    """Vision model 專用 structured call。
+    保留圖片 content blocks，直接送 OpenAI client（繞過 LangChain）。
+    跳過 function_calling pass，直接走 JSON prompt + 手動解析。
+    """
+    fallback_system = (
+        f"{system}\n\n"
+        "請嚴格以 JSON 回傳，符合以下 schema，不要加 markdown code fence 以外的文字：\n"
+        f"{json.dumps(schema.model_json_schema(), ensure_ascii=False)}"
+    )
+    resp = await client.chat.completions.create(
+        model=settings.VISION_MODEL,
+        messages=[
+            {"role": "system", "content": fallback_system},
+            {"role": "user", "content": user_content},
+        ],
+        max_tokens=max_tokens,
+    )
+    raw_text = _strip_think(resp.choices[0].message.content or "")
+    obj_str = _extract_json_obj(raw_text)
+    if not obj_str:
+        raise ValueError(f"vision model 無 JSON output. preview: {raw_text[:300]}")
+    try:
+        data = json.loads(obj_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSON decode failed: {e}. preview: {obj_str[:300]}") from e
+    try:
+        return schema.model_validate(data)
+    except ValidationError as e:
+        raise ValueError(f"Schema validation failed: {e}. data: {str(data)[:300]}") from e
 
 
 def build_document_message(file_path: str, text_content: str | None = None) -> dict:
