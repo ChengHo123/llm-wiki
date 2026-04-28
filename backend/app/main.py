@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.api.v1 import auth, documents, wiki, query, linebot
-from app.api.v1.linebot import close_line_client
+from app.api.v1.linebot import warmup_line_client, close_line_client
 from app.services.ingest_queue import start_worker, stop_worker
 
 settings = get_settings()
@@ -13,6 +13,7 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await start_worker()
+    await warmup_line_client()
     yield
     await stop_worker()
     await close_line_client()

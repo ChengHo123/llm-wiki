@@ -48,6 +48,18 @@ def _get_line_client() -> httpx.AsyncClient:
     return _line_client
 
 
+async def warmup_line_client() -> None:
+    """程序啟動時預熱 LINE API 連線（DNS + TLS handshake），
+    避免第一個 reply/loading request 碰上 ConnectTimeout。
+    """
+    try:
+        client = _get_line_client()
+        await client.get("https://api.line.me/v2/bot/info")
+        logger.info("LINE client warmed up")
+    except Exception as e:
+        logger.warning("LINE client warmup failed (non-fatal): %s %s", type(e).__name__, e)
+
+
 async def close_line_client() -> None:
     global _line_client
     if _line_client is not None:
