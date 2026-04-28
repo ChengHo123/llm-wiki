@@ -14,6 +14,8 @@ import app.models.document  # noqa: F401, E402
 import app.models.wiki_page  # noqa: F401, E402
 import app.models.wiki_link  # noqa: F401, E402
 import app.models.activity_log  # noqa: F401, E402
+import app.models.line_user_binding  # noqa: F401, E402
+import app.models.web_session  # noqa: F401, E402
 target_metadata = Base.metadata
 
 import os

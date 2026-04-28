@@ -16,7 +16,9 @@ class Settings(BaseSettings):
     # LINE Bot
     LINE_CHANNEL_SECRET: str = ""
     LINE_CHANNEL_ACCESS_TOKEN: str = ""
-    LINE_BOT_WIKI_API_KEY: str = ""
+
+    # Frontend URL（用於 LINE bot 推送登入連結）
+    FRONTEND_URL: str = "http://localhost:3000"
 
     class Config:
         env_file = ".env"

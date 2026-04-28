@@ -53,7 +53,7 @@ services:
       MAX_WIKI_PAGES: ${MAX_WIKI_PAGES:-100}
       LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET:-}
       LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN:-}
-      LINE_BOT_WIKI_API_KEY: ${LINE_BOT_WIKI_API_KEY:-}
+      FRONTEND_URL: ${FRONTEND_URL:-https://${DOMAIN}}
     volumes:
       - uploads:/app/uploads
     depends_on:

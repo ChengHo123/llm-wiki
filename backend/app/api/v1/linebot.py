@@ -1,22 +1,26 @@
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
 import logging
 import random
+import re
 from collections import deque
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.security import hash_key
+from app.core.security import generate_api_key, generate_session_token, hash_key
 from app.db.session import AsyncSessionLocal
 from app.models.api_key import ApiKey
+from app.models.line_user_binding import LineUserBinding
+from app.models.web_session import WebSession
 from app.models.wiki_page import WikiPage
 from app.services.llm import call_llm
-from app.services.login_pairing import redeem as redeem_pair
 from app.services.query_service import run_query
 
 logger = logging.getLogger(__name__)
@@ -24,7 +28,71 @@ router = APIRouter()
 settings = get_settings()
 
 LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
+LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 LINE_LOADING_URL = "https://api.line.me/v2/bot/chat/loading/start"
+
+
+# 持久 httpx client：keep-alive 連線池讓 DNS 解析 + TLS handshake 只發生一次，
+# 之後 request 都重用既有連線，避免 Docker / WSL2 DNS 抖動曝光面。
+_line_client: httpx.AsyncClient | None = None
+
+
+def _get_line_client() -> httpx.AsyncClient:
+    global _line_client
+    if _line_client is None:
+        _line_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=15.0, write=15.0, pool=5.0),
+            limits=httpx.Limits(max_keepalive_connections=10, keepalive_expiry=120.0),
+            headers={"Authorization": f"Bearer {settings.LINE_CHANNEL_ACCESS_TOKEN}"},
+        )
+    return _line_client
+
+
+async def close_line_client() -> None:
+    global _line_client
+    if _line_client is not None:
+        await _line_client.aclose()
+        _line_client = None
+
+
+# LINE 不支援 markdown，LLM 偶爾會無視 prompt 仍然輸出。送出前一律剝掉。
+_MD_FENCED = re.compile(r"```(?:\w+)?\s*\n?([\s\S]*?)```")
+_MD_INLINE_CODE = re.compile(r"`([^`\n]+)`")
+_MD_BOLD_STAR = re.compile(r"\*\*([^*\n]+)\*\*")
+_MD_BOLD_UNDER = re.compile(r"__([^_\n]+)__")
+_MD_ITALIC_STAR = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
+_MD_ITALIC_UNDER = re.compile(r"(?<![A-Za-z0-9_])_([^_\n]+)_(?![A-Za-z0-9_])")
+_MD_STRIKE = re.compile(r"~~([^~\n]+)~~")
+_MD_WIKILINK = re.compile(r"\[\[([^\]\n]+?)(?:\|[^\]\n]+)?\]\]")
+_MD_LINK = re.compile(r"\[([^\]\n]+)\]\(([^)\n]+)\)")
+_MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
+_MD_BLOCKQUOTE = re.compile(r"^\s{0,3}>\s?", re.MULTILINE)
+_MD_BULLET = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
+_MD_NUMBERED = re.compile(r"^(\s*)\d+\.\s+", re.MULTILINE)
+_MD_HRULE = re.compile(r"^\s{0,3}(?:[-*_]\s?){3,}\s*$", re.MULTILINE)
+
+
+def _strip_markdown(text: str) -> str:
+    """剝掉 LLM 偷塞的 markdown 標記，保留內容給 LINE 純文字顯示。"""
+    if not text:
+        return text
+    text = _MD_FENCED.sub(r"\1", text)
+    text = _MD_INLINE_CODE.sub(r"\1", text)
+    text = _MD_BOLD_STAR.sub(r"\1", text)
+    text = _MD_BOLD_UNDER.sub(r"\1", text)
+    text = _MD_ITALIC_STAR.sub(r"\1", text)
+    text = _MD_ITALIC_UNDER.sub(r"\1", text)
+    text = _MD_STRIKE.sub(r"\1", text)
+    text = _MD_WIKILINK.sub(r"\1", text)
+    text = _MD_LINK.sub(r"\1", text)
+    text = _MD_HEADING.sub("", text)
+    text = _MD_BLOCKQUOTE.sub("", text)
+    text = _MD_BULLET.sub(r"\1・", text)
+    text = _MD_NUMBERED.sub(r"\1", text)
+    text = _MD_HRULE.sub("", text)
+    # 連續空行收斂成兩行
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 _pending_users: set[str] = set()
 
@@ -112,49 +180,129 @@ def _quick_reply() -> dict:
     }
 
 
+_TRANSIENT_HTTP_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+)
+
+
+async def _post_line_with_retry(
+    label: str, url: str, payload: dict, attempts: int = 3
+) -> None:
+    """送 LINE API，碰到網路 / DNS 抖動最多重試 attempts 次。
+    LINE replyToken 30 秒有效，這個 retry 預算夠用。
+    """
+    client = _get_line_client()
+    last_err: Exception | None = None
+    for i in range(attempts):
+        try:
+            resp = await client.post(url, json=payload)
+            if resp.status_code == 200:
+                return
+            # 4xx 重試也沒用（token 失效、payload 錯）
+            if 400 <= resp.status_code < 500:
+                logger.error(
+                    "LINE %s 4xx (no retry): %s %s",
+                    label, resp.status_code, resp.text[:200],
+                )
+                return
+            logger.warning(
+                "LINE %s non-200 (attempt %d/%d): %s %s",
+                label, i + 1, attempts, resp.status_code, resp.text[:200],
+            )
+        except _TRANSIENT_HTTP_ERRORS as e:
+            last_err = e
+            logger.warning(
+                "LINE %s transient (attempt %d/%d): %s %s",
+                label, i + 1, attempts, type(e).__name__, e or "(empty)",
+            )
+        if i < attempts - 1:
+            await asyncio.sleep(0.5 * (i + 1))
+    if last_err:
+        logger.error("LINE %s gave up after %d attempts: %s", label, attempts, last_err)
+
+
 async def _reply(reply_token: str, text: str, with_quick_reply: bool = True) -> None:
+    text = _strip_markdown(text)
     msg: dict = {"type": "text", "text": text[:5000]}
     if with_quick_reply:
         msg["quickReply"] = _quick_reply()
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            LINE_REPLY_URL,
-            json={"replyToken": reply_token, "messages": [msg]},
-            headers={"Authorization": f"Bearer {settings.LINE_CHANNEL_ACCESS_TOKEN}"},
-        )
-        if resp.status_code != 200:
-            logger.error("LINE reply failed: %s %s", resp.status_code, resp.text)
+    await _post_line_with_retry(
+        "reply",
+        LINE_REPLY_URL,
+        {"replyToken": reply_token, "messages": [msg]},
+    )
+
+
+async def _push(user_id: str, text: str) -> None:
+    """主動推送訊息（沒有 reply token 時用，例如 follow event 之後）。"""
+    if not user_id:
+        return
+    text = _strip_markdown(text)
+    await _post_line_with_retry(
+        "push",
+        LINE_PUSH_URL,
+        {
+            "to": user_id,
+            "messages": [{"type": "text", "text": text[:5000], "quickReply": _quick_reply()}],
+        },
+    )
 
 
 async def _show_loading(user_id: str, seconds: int = 60) -> None:
-    """觸發 LINE「正在輸入…」動畫。bot 回覆訊息時會自動結束。1:1 對話才有效。"""
-    print(f"[LINE LOADING] called user_id={user_id[:10] if user_id else '(none)'}", flush=True)
+    """觸發 LINE「正在輸入…」動畫。1:1 對話才有效。
+    必須在 reply 前 await 完成，loading 才會比 reply 早到。
+    用 persistent client（連線池熱），所以 timeout 抓緊一點也夠。
+    """
     if not user_id:
         return
+    # loadingSeconds 必須是 5 的倍數、5~60 之間
+    seconds = max(5, min(60, (seconds // 5) * 5))
+    client = _get_line_client()
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                LINE_LOADING_URL,
-                json={"chatId": user_id, "loadingSeconds": seconds},
-                headers={"Authorization": f"Bearer {settings.LINE_CHANNEL_ACCESS_TOKEN}"},
+        resp = await client.post(
+            LINE_LOADING_URL,
+            json={"chatId": user_id, "loadingSeconds": seconds},
+            timeout=5.0,
+        )
+        if resp.status_code not in (200, 202):
+            logger.warning(
+                "LINE loading non-2xx: %s %s", resp.status_code, resp.text[:200]
             )
-            print(f"[LINE LOADING] status={resp.status_code} body={resp.text[:300]!r}", flush=True)
     except Exception as e:
-        print(f"[LINE LOADING] exception: {e}", flush=True)
+        logger.warning(
+            "LINE loading animation failed: %s %s", type(e).__name__, e or "(empty)"
+        )
 
 
-async def _handle_login_command(reply_token: str, text: str) -> None:
-    parts = text.split()
-    if len(parts) != 2 or not parts[1].isdigit() or len(parts[1]) != 6:
-        await _reply(reply_token, "用法：/login 123456。那串 6 位數從網頁複製過來。")
-        return
-    if not settings.LINE_BOT_WIKI_API_KEY:
-        await _reply(reply_token, "嚕比的金鑰沒設好，主人去檢查 LINE_BOT_WIKI_API_KEY。")
-        return
-    if redeem_pair(parts[1], settings.LINE_BOT_WIKI_API_KEY):
-        await _reply(reply_token, "汪！登入好了，主人快回網頁看。🐾")
-    else:
-        await _reply(reply_token, "嚕比聞不出這串配對碼，可能過期了。主人去網頁重產一個。")
+async def _get_or_create_api_key(line_user_id: str, db: AsyncSession) -> ApiKey:
+    """查 line_user_bindings 找對應 ApiKey；沒有就自動建立。"""
+    binding_result = await db.execute(
+        select(LineUserBinding).where(LineUserBinding.line_user_id == line_user_id)
+    )
+    binding = binding_result.scalar_one_or_none()
+
+    if binding:
+        api_key_result = await db.execute(select(ApiKey).where(ApiKey.id == binding.api_key_id))
+        api_key = api_key_result.scalar_one_or_none()
+        if api_key:
+            return api_key
+        # binding 存在但 ApiKey 被刪了 → 重建
+        await db.delete(binding)
+        await db.flush()
+
+    raw_key = generate_api_key()
+    api_key = ApiKey(key_hash=hash_key(raw_key), name=f"LINE:{line_user_id[:8]}")
+    db.add(api_key)
+    await db.flush()
+
+    db.add(LineUserBinding(line_user_id=line_user_id, api_key_id=api_key.id))
+    await db.commit()
+    await db.refresh(api_key)
+    logger.info("LINE: auto-created ApiKey for user=%s api_key_id=%s", line_user_id[:8], api_key.id)
+    return api_key
 
 
 KNOWLEDGE_SUMMARY_PROMPT = """你是嚕比（母小白柴犬）。
@@ -171,16 +319,9 @@ KNOWLEDGE_SUMMARY_PROMPT = """你是嚕比（母小白柴犬）。
 """
 
 
-async def _build_knowledge_summary() -> str:
+async def _build_knowledge_summary(api_key: ApiKey) -> str:
     """嚕比簡述 wiki 主題大方向（不列具體頁面）。"""
     async with AsyncSessionLocal() as db:
-        api_key_result = await db.execute(
-            select(ApiKey).where(ApiKey.key_hash == hash_key(settings.LINE_BOT_WIKI_API_KEY))
-        )
-        api_key = api_key_result.scalar_one_or_none()
-        if not api_key:
-            return "嚕比的項圈牌牌不對（金鑰異常），翻不到 wiki。"
-
         pages_result = await db.execute(
             select(WikiPage)
             .where(WikiPage.api_key_id == api_key.id)
@@ -223,31 +364,82 @@ async def _handle_postback(reply_token: str, user_id: str, data: str) -> None:
         return
 
     if action == "knowledge":
-        summary = await _build_knowledge_summary()
+        if not user_id:
+            await _reply(reply_token, "嚕比認不出主人是誰。")
+            return
+        async with AsyncSessionLocal() as db:
+            api_key = await _get_or_create_api_key(user_id, db)
+        summary = await _build_knowledge_summary(api_key)
         await _reply(reply_token, summary)
         return
 
+    if action == "get_link":
+        await _send_login_link(reply_token, user_id)
+        return
+
     await _reply(reply_token, "汪？嚕比看不懂這個按鈕。")
+
+
+# Rich Menu / 文字觸發都會打到這裡
+GET_LINK_KEYWORDS = {"取得連結", "登入網頁", "wiki 連結", "/link"}
+
+
+async def _send_login_link(reply_token: str, user_id: str) -> None:
+    """產生 WebSession 並回覆一鍵登入連結。"""
+    if not user_id:
+        await _reply(reply_token, "嚕比認不出主人是誰，先加好友。")
+        return
+    async with AsyncSessionLocal() as db:
+        api_key = await _get_or_create_api_key(user_id, db)
+        session_token = generate_session_token()
+        db.add(WebSession(session_token=session_token, api_key_id=api_key.id))
+        await db.commit()
+    url = f"{settings.FRONTEND_URL.rstrip('/')}/m?token={session_token}"
+    msg = (
+        "汪！主人的 wiki 連結來了 🐾\n"
+        f"{url}\n\n"
+        "點下去就能上傳文件給嚕比。連結 24 小時內有效。"
+    )
+    await _reply(reply_token, msg, with_quick_reply=False)
+
+
+async def _handle_follow_event(user_id: str) -> None:
+    """加好友事件：自動建立 wiki 並發送歡迎訊息。"""
+    if not user_id:
+        return
+    async with AsyncSessionLocal() as db:
+        await _get_or_create_api_key(user_id, db)
+    welcome = (
+        "汪！嚕比認識你了，主人 🐾\n\n"
+        "嚕比是你的 wiki 小幫手，主人問什麼嚕比就翻 wiki 找答案。\n"
+        "現在 wiki 還是空的，按下方選單的「取得 wiki 連結」嚕比給主人網頁網址，"
+        "點進去就能上傳文件。"
+    )
+    await _push(user_id, welcome)
 
 
 async def _handle_text_event(reply_token: str, user_id: str, question: str) -> None:
     logger.info("LINE event: user=%s question=%r", user_id[:8] if user_id else "?", question[:60])
     await _show_loading(user_id, 60)
 
-    if question.startswith("/login"):
-        await _handle_login_command(reply_token, question)
+    if question.strip() in GET_LINK_KEYWORDS:
+        await _send_login_link(reply_token, user_id)
+        return
+
+    if user_id and user_id in _pending_users:
+        await _reply(reply_token, random.choice(BUSY_REPLIES))
         return
 
     # 「嚕比知道什麼」/「嚕比知道什麼？」/「嚕比知道什麼嗎」等變體
     normalized = question.replace("？", "").replace("?", "").replace("嗎", "").strip()
     if normalized == "嚕比知道什麼":
-        summary = await _build_knowledge_summary()
+        if not user_id:
+            await _reply(reply_token, "嚕比認不出主人是誰。")
+            return
+        async with AsyncSessionLocal() as db:
+            api_key = await _get_or_create_api_key(user_id, db)
+        summary = await _build_knowledge_summary(api_key)
         await _reply(reply_token, summary)
-        return
-
-    if user_id and user_id in _pending_users:
-        logger.info("LINE: user %s busy, sending wait reply", user_id[:8])
-        await _reply(reply_token, random.choice(BUSY_REPLIES))
         return
 
     if user_id:
@@ -256,15 +448,11 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
     try:
         async with AsyncSessionLocal() as db:
             try:
-                result = await db.execute(
-                    select(ApiKey).where(ApiKey.key_hash == hash_key(settings.LINE_BOT_WIKI_API_KEY))
-                )
-                api_key = result.scalar_one_or_none()
-                if not api_key:
-                    logger.error("LINE: api_key row not found for LINE_BOT_WIKI_API_KEY")
-                    await _reply(reply_token, "嚕比的項圈牌牌不對（金鑰異常），主人檢查一下設定。")
+                if not user_id:
+                    await _reply(reply_token, "嚕比認不出主人是誰，先加好友。")
                     return
-                logger.info("LINE: running query…")
+
+                api_key = await _get_or_create_api_key(user_id, db)
                 history = list(_user_history.get(user_id, [])) if user_id else []
                 data = await run_query(
                     question=question,
@@ -273,10 +461,8 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
                     persona=RUBY_PERSONA,
                     history=history,
                 )
-                logger.info("LINE: query done, replying (len=%d)", len(data.get("answer", "")))
                 answer_text = data["answer"]
                 await _reply(reply_token, answer_text)
-                # 成功才寫進 history（避免錯誤回應污染脈絡）
                 if user_id:
                     dq = _user_history.setdefault(user_id, deque(maxlen=HISTORY_MAXLEN))
                     dq.append({"role": "user", "content": question})
@@ -305,6 +491,10 @@ async def linebot_webhook(request: Request, background_tasks: BackgroundTasks):
         ev_type = event.get("type")
         reply_token = event.get("replyToken", "")
         user_id = event.get("source", {}).get("userId", "")
+
+        if ev_type == "follow":
+            background_tasks.add_task(_handle_follow_event, user_id)
+            continue
 
         if ev_type == "postback":
             postback_data = event.get("postback", {}).get("data", "")

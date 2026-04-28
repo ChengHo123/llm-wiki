@@ -1,9 +1,10 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { BookOpen, Upload, MessageSquare, Home, Network } from 'lucide-react'
+import { BookOpen, MessageSquare, Home, Network } from 'lucide-react'
 import HomePage from './pages/Home'
 import WikiPage from './pages/Wiki'
 import QueryPage from './pages/Query'
 import GraphPage from './pages/Graph'
+import MobilePage from './pages/Mobile'
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -52,14 +53,16 @@ function Layout({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <BrowserRouter>
-      <Layout>
-        <Routes>
-          <Route path="/"      element={<HomePage />} />
-          <Route path="/wiki"  element={<WikiPage />} />
-          <Route path="/graph" element={<GraphPage />} />
-          <Route path="/query" element={<QueryPage />} />
-        </Routes>
-      </Layout>
+      <Routes>
+        {/* Mobile route — no sidebar */}
+        <Route path="/m" element={<MobilePage />} />
+
+        {/* Desktop routes */}
+        <Route path="/"      element={<Layout><HomePage /></Layout>} />
+        <Route path="/wiki"  element={<Layout><WikiPage /></Layout>} />
+        <Route path="/graph" element={<Layout><GraphPage /></Layout>} />
+        <Route path="/query" element={<Layout><QueryPage /></Layout>} />
+      </Routes>
     </BrowserRouter>
   )
 }

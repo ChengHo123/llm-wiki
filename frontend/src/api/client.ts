@@ -71,9 +71,19 @@ const api = axios.create({
   baseURL: '/api/v1',
 })
 
+function isSessionToken(value: string): boolean {
+  return value.startsWith('ws_')
+}
+
 api.interceptors.request.use((config) => {
   const key = getStoredApiKey()
-  if (key) config.headers['X-API-Key'] = key
+  if (key) {
+    if (isSessionToken(key)) {
+      config.headers['X-Session-Token'] = key
+    } else {
+      config.headers['X-API-Key'] = key
+    }
+  }
   return config
 })
 
@@ -87,22 +97,6 @@ export async function whoAmI(rawKey: string): Promise<{ name: string }> {
   const res = await axios.get('/api/v1/keys/me', {
     headers: { 'X-API-Key': rawKey },
   })
-  return res.data
-}
-
-export async function startLinePair(): Promise<{ code: string; expires_in: number }> {
-  const res = await axios.post('/api/v1/auth/line-pair/start')
-  return res.data
-}
-
-export interface LinePairPollResult {
-  status: 'pending' | 'redeemed' | 'expired'
-  api_key?: string
-  name?: string
-}
-
-export async function pollLinePair(code: string): Promise<LinePairPollResult> {
-  const res = await axios.get('/api/v1/auth/line-pair/poll', { params: { code } })
   return res.data
 }
 
@@ -237,12 +231,15 @@ export async function* queryWikiStream(
   question: string,
   history: ChatHistoryMsg[] = [],
 ): AsyncGenerator<QueryStreamEvent> {
+  const credential = getStoredApiKey()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (credential) {
+    if (isSessionToken(credential)) headers['X-Session-Token'] = credential
+    else headers['X-API-Key'] = credential
+  }
   const res = await fetch('/api/v1/query/stream', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': getStoredApiKey(),
-    },
+    headers,
     body: JSON.stringify({ question, history }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
