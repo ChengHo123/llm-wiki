@@ -30,6 +30,14 @@ _chat = ChatOpenAI(
     max_retries=0,
 )
 
+_vision_chat = ChatOpenAI(
+    model=settings.VISION_MODEL,
+    base_url=settings.LLM_BASE_URL,
+    api_key=settings.LLM_API_KEY,
+    timeout=360000.0,
+    max_retries=0,
+)
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -221,14 +229,40 @@ async def vision_structured_call(
     user_content: list,
     max_tokens: int = 16384,
 ) -> T:
-    """Vision model 專用 structured call。
-    保留圖片 content blocks，直接送 OpenAI client（繞過 LangChain）。
-    跳過 function_calling pass，直接走 JSON prompt + 手動解析。
+    """Vision model 專用 structured call。對齊文字 path 的兩段式：
+    Pass 1: LangChain function_calling（tool）—— 多數 vision model 支援不穩，會 fallback
+    Pass 2: 嚴格 JSON prompt + 手動 parse（保留 multimodal content）
     """
+    chat = _vision_chat.bind(max_tokens=max_tokens)
+
+    # Pass 1: tool calling
+    try:
+        structured = chat.with_structured_output(
+            schema, method="function_calling", include_raw=True
+        )
+        result = await structured.ainvoke([
+            SystemMessage(content=system),
+            HumanMessage(content=user_content),
+        ])
+        parsed = result.get("parsed") if isinstance(result, dict) else result
+        if parsed is not None:
+            return parsed
+        raw_msg: AIMessage | None = result.get("raw") if isinstance(result, dict) else None
+        raw_text = raw_msg.content if raw_msg else ""
+        logger.warning(
+            "vision function_calling returned no parsed object; raw preview: %s",
+            str(raw_text)[:300],
+        )
+    except Exception as e:
+        logger.warning("vision function_calling path failed: %s", e)
+
+    # Pass 2: JSON prompt + 手動 parse，保留 multimodal content（繞過 _flatten_content）
     fallback_system = (
         f"{system}\n\n"
-        "請嚴格以 JSON 回傳，符合以下 schema，不要加 markdown code fence 以外的文字：\n"
-        f"{json.dumps(schema.model_json_schema(), ensure_ascii=False)}"
+        "請嚴格以 JSON 回傳，符合以下 schema，不要加任何前後文字、不要解釋、不要加 markdown code fence：\n"
+        f"{json.dumps(schema.model_json_schema(), ensure_ascii=False)}\n\n"
+        "回傳格式範例：{\"pages\": [...], \"summary\": \"...\"}\n"
+        "直接以 { 開頭、以 } 結尾。"
     )
     resp = await client.chat.completions.create(
         model=settings.VISION_MODEL,

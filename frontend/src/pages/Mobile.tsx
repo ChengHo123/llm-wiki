@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import ForceGraph2D from 'react-force-graph-2d'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   Upload, FileText, CheckCircle, XCircle, Clock, RefreshCw, Trash2, RotateCcw,
-  Network, ArrowLeft, LogOut,
+  Network, ArrowLeft, LogOut, BookOpen, ChevronRight,
 } from 'lucide-react'
 import {
   uploadDocument, listDocuments, deleteDocument, retryDocument,
   getStoredApiKey, clearStoredApiKey, getActiveKeyName,
-  getWikiGraph,
-  type Document, type GraphData,
+  getWikiGraph, listWikiPages, getWikiPage, deleteWikiPage,
+  type Document, type GraphData, type WikiPageSummary, type WikiPageDetail,
 } from '../api/client'
 
 const STATUS_ICON: Record<string, JSX.Element> = {
@@ -35,6 +37,22 @@ const PAGE_TYPE_COLOR: Record<string, string> = {
   concept: '#f59e0b',
 }
 
+const PAGE_TYPE_BADGE: Record<string, string> = {
+  index:   'bg-purple-100 text-purple-700',
+  summary: 'bg-blue-100 text-blue-700',
+  entity:  'bg-green-100 text-green-700',
+  concept: 'bg-orange-100 text-orange-700',
+}
+
+const PAGE_TYPE_LABEL: Record<string, string> = {
+  index:   '索引',
+  summary: '摘要',
+  entity:  '實體',
+  concept: '概念',
+}
+
+type View = 'main' | 'graph' | 'wiki-list' | 'wiki-detail'
+
 interface MobileGraphNode {
   id: string
   title: string
@@ -43,7 +61,7 @@ interface MobileGraphNode {
   y?: number
 }
 
-function GraphView({ onBack }: { onBack: () => void }) {
+function GraphView({ onBack, onOpenPage }: { onBack: () => void; onOpenPage: (id: string) => void }) {
   const [data, setData] = useState<{ nodes: MobileGraphNode[]; links: any[] } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -138,7 +156,215 @@ function GraphView({ onBack }: { onBack: () => void }) {
             height={size.h}
             cooldownTicks={100}
             onEngineStop={() => fgRef.current?.zoomToFit(400, 30)}
+            onNodeClick={(n: any) => onOpenPage(n.id)}
           />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function WikiListView({
+  onBack, onOpenPage,
+}: {
+  onBack: () => void
+  onOpenPage: (id: string) => void
+}) {
+  const [pages, setPages] = useState<WikiPageSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [filter, setFilter] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    listWikiPages()
+      .then((p) => alive && setPages(p))
+      .catch(() => alive && setError('載入失敗'))
+      .finally(() => alive && setLoading(false))
+    return () => { alive = false }
+  }, [])
+
+  const filtered = filter.trim()
+    ? pages.filter((p) => p.title.toLowerCase().includes(filter.toLowerCase()))
+    : pages
+
+  return (
+    <div className="fixed inset-0 z-30 bg-gray-50 flex flex-col">
+      <header className="h-14 bg-white border-b border-gray-200 flex items-center px-3 gap-2 shrink-0">
+        <button onClick={onBack} className="p-2 -ml-2 text-gray-600">
+          <ArrowLeft size={20} />
+        </button>
+        <h1 className="font-semibold text-gray-800">Wiki 頁面</h1>
+        <span className="text-xs text-gray-400 ml-auto">{pages.length} 頁</span>
+      </header>
+
+      <div className="px-4 py-3 bg-white border-b border-gray-100 shrink-0">
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="搜尋標題…"
+          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+        />
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-3">
+        {loading ? (
+          <div className="flex justify-center py-16">
+            <RefreshCw size={24} className="animate-spin text-gray-400" />
+          </div>
+        ) : error ? (
+          <p className="text-sm text-red-500 text-center py-16">{error}</p>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">
+            <BookOpen size={36} className="mx-auto mb-2 opacity-30" />
+            <p className="text-sm">{pages.length === 0 ? '還沒有 wiki 頁面' : '沒有符合的頁面'}</p>
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {filtered.map((page) => (
+              <li key={page.id}>
+                <button
+                  onClick={() => onOpenPage(page.id)}
+                  className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-left active:bg-gray-50 flex items-start gap-2"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_BADGE[page.page_type] || 'bg-gray-100 text-gray-600'}`}>
+                        {PAGE_TYPE_LABEL[page.page_type] || page.page_type}
+                      </span>
+                      <span className="text-[10px] text-gray-400 ml-auto">
+                        {new Date(page.updated_at).toLocaleDateString('zh-TW')}
+                      </span>
+                    </div>
+                    <h3 className="font-medium text-gray-800 text-sm leading-snug">{page.title}</h3>
+                  </div>
+                  <ChevronRight size={16} className="text-gray-300 flex-shrink-0 mt-1" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function WikiDetailView({
+  pageId, onBack, onOpenPage,
+}: {
+  pageId: string
+  onBack: () => void
+  onOpenPage: (id: string) => void
+}) {
+  const [page, setPage] = useState<WikiPageDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [allPages, setAllPages] = useState<WikiPageSummary[]>([])
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    setError('')
+    setPage(null)
+    Promise.all([getWikiPage(pageId), listWikiPages()])
+      .then(([p, list]) => {
+        if (!alive) return
+        setPage(p)
+        setAllPages(list)
+      })
+      .catch(() => alive && setError('載入頁面失敗'))
+      .finally(() => alive && setLoading(false))
+    return () => { alive = false }
+  }, [pageId])
+
+  // [[標題]] 轉成可點擊連結
+  const renderContent = (text: string) => {
+    return text.replace(
+      /\[\[([^\]]+?)(?:\|([^\]]+?))?\]\]/g,
+      (_, target, alias) => {
+        const display = alias || target
+        const found = allPages.find((p) => p.title === target || p.slug === target)
+        if (found) return `[${display}](#wiki:${found.id})`
+        return display
+      },
+    )
+  }
+
+  const handleDelete = async () => {
+    if (!page) return
+    if (!confirm(`刪除頁面「${page.title}」？`)) return
+    try {
+      await deleteWikiPage(page.id)
+      onBack()
+    } catch {
+      setError('刪除失敗')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-30 bg-gray-50 flex flex-col">
+      <header className="h-14 bg-white border-b border-gray-200 flex items-center px-3 gap-2 shrink-0">
+        <button onClick={onBack} className="p-2 -ml-2 text-gray-600">
+          <ArrowLeft size={20} />
+        </button>
+        <h1 className="font-semibold text-gray-800 flex-1 truncate">
+          {page?.title || 'Wiki 頁面'}
+        </h1>
+        {page && (
+          <button
+            onClick={handleDelete}
+            className="p-2 -mr-2 text-gray-300 active:text-red-500"
+            title="刪除"
+          >
+            <Trash2 size={16} />
+          </button>
+        )}
+      </header>
+
+      <div className="flex-1 overflow-y-auto">
+        {loading ? (
+          <div className="flex justify-center py-16">
+            <RefreshCw size={24} className="animate-spin text-gray-400" />
+          </div>
+        ) : error || !page ? (
+          <p className="text-sm text-red-500 text-center py-16">{error || '頁面不存在'}</p>
+        ) : (
+          <article className="px-4 py-4 max-w-md mx-auto">
+            <div className="flex items-center gap-2 mb-2">
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_BADGE[page.page_type] || 'bg-gray-100 text-gray-600'}`}>
+                {PAGE_TYPE_LABEL[page.page_type] || page.page_type}
+              </span>
+              <span className="text-[10px] text-gray-400">
+                更新：{new Date(page.updated_at).toLocaleDateString('zh-TW')}
+              </span>
+            </div>
+            <h1 className="text-xl font-bold text-gray-800 mb-3 leading-tight">{page.title}</h1>
+            <div className="prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_img]:max-w-full [&_table]:block [&_table]:overflow-x-auto">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children, ...rest }) => {
+                    if (href?.startsWith('#wiki:')) {
+                      const id = href.slice(6)
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => onOpenPage(id)}
+                          className="text-blue-600 underline"
+                        >
+                          {children}
+                        </button>
+                      )
+                    }
+                    return <a href={href} target="_blank" rel="noreferrer" {...rest}>{children}</a>
+                  },
+                }}
+              >
+                {renderContent(page.content)}
+              </ReactMarkdown>
+            </div>
+          </article>
         )}
       </div>
     </div>
@@ -151,7 +377,8 @@ export default function MobilePage() {
   const [docs, setDocs] = useState<Document[]>([])
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
-  const [showGraph, setShowGraph] = useState(false)
+  const [view, setView] = useState<View>('main')
+  const [selectedPageId, setSelectedPageId] = useState<string | null>(null)
 
   const loadDocs = useCallback(async () => {
     if (!getStoredApiKey()) return
@@ -201,6 +428,11 @@ export default function MobilePage() {
     setDocs([])
   }
 
+  const openPage = (id: string) => {
+    setSelectedPageId(id)
+    setView('wiki-detail')
+  }
+
   if (!apiKey) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 text-center">
@@ -214,7 +446,21 @@ export default function MobilePage() {
     )
   }
 
-  if (showGraph) return <GraphView onBack={() => setShowGraph(false)} />
+  if (view === 'graph') {
+    return <GraphView onBack={() => setView('main')} onOpenPage={openPage} />
+  }
+  if (view === 'wiki-list') {
+    return <WikiListView onBack={() => setView('main')} onOpenPage={openPage} />
+  }
+  if (view === 'wiki-detail' && selectedPageId) {
+    return (
+      <WikiDetailView
+        pageId={selectedPageId}
+        onBack={() => setView('wiki-list')}
+        onOpenPage={openPage}
+      />
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -296,7 +542,15 @@ export default function MobilePage() {
         </section>
 
         <button
-          onClick={() => setShowGraph(true)}
+          onClick={() => setView('wiki-list')}
+          className="w-full bg-white border border-gray-200 rounded-2xl py-4 flex items-center justify-center gap-2 text-gray-700 font-medium active:bg-gray-50"
+        >
+          <BookOpen size={18} className="text-blue-500" />
+          看 Wiki 頁面
+        </button>
+
+        <button
+          onClick={() => setView('graph')}
           className="w-full bg-white border border-gray-200 rounded-2xl py-4 flex items-center justify-center gap-2 text-gray-700 font-medium active:bg-gray-50"
         >
           <Network size={18} className="text-blue-500" />
