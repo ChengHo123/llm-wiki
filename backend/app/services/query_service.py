@@ -76,8 +76,9 @@ CHAT_ONLY_SYSTEM_PROMPT = """你正在跟使用者自然聊天，不需要查任
 
 # Phase 1：讓 LLM 從標題列表挑出相關頁面
 SELECT_PAGES_PROMPT = """你是一個知識庫搜尋助手。
-給定一個問題和 wiki 頁面列表，挑出最相關的頁面（最多 8 個）。
-只回傳 slug 列表；若沒有相關頁面，回傳空列表。
+給定一個問題和 wiki 頁面列表，挑出**所有**與問題相關的頁面，**數量不限**。
+寧可多選不要漏；單一文件（例如一本小說）的多個相關頁面要全部選出，避免回答時資訊不完整。
+只回傳 slug 列表；若真的完全無相關，回傳空列表。
 """
 
 # Phase 2：用選出的頁面完整內容來回答
@@ -289,8 +290,10 @@ async def chat_only_reply(
     )
 
 
-def _keyword_match(question: str, pages: list[WikiPage], limit: int) -> list[WikiPage]:
-    """以問題詞彙粗略比對 title+content，分數高者優先。"""
+def _keyword_match(
+    question: str, pages: list[WikiPage], limit: int | None = None
+) -> list[WikiPage]:
+    """以問題詞彙粗略比對 title+content，分數高者優先。limit=None 表示不限制（回傳所有 score>0）。"""
     tokens = [t for t in re.split(r"[\s,.，。、?？!！:：;；]+", question) if len(t) >= 2]
     if not tokens:
         return []
@@ -301,7 +304,8 @@ def _keyword_match(question: str, pages: list[WikiPage], limit: int) -> list[Wik
         if score > 0:
             scored.append((score, p))
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [p for _, p in scored[:limit]]
+    matched = [p for _, p in scored]
+    return matched[:limit] if limit is not None else matched
 
 
 async def select_relevant_pages(
@@ -310,7 +314,7 @@ async def select_relevant_pages(
     max_pages: int | None = None,
 ) -> list[WikiPage]:
     """
-    Phase 1：小型 wiki（≤max_pages）全量帶入；否則用 LLM 挑選。
+    Phase 1：小型 wiki（≤max_pages）全量帶入；否則用 LLM 挑選**所有相關頁面**（不再硬截斷）。
     index 帶 content 摘要讓 LLM 有線索，並以關鍵字比對作 fallback。
     """
     if not all_pages:
@@ -319,7 +323,7 @@ async def select_relevant_pages(
     if max_pages is None:
         max_pages = settings.MAX_WIKI_PAGES
 
-    # 上傳時已限制 wiki 頁數 ≤ MAX_WIKI_PAGES，理論上全量帶入
+    # 小型 wiki 直接全量帶入
     if len(all_pages) <= max_pages:
         return list(all_pages)
 
@@ -345,15 +349,15 @@ async def select_relevant_pages(
 
     selected = [p for p in all_pages if p.slug in relevant_slugs]
 
-    # Fallback 1: LLM 沒選任何頁面 → 用關鍵字比對
+    # Fallback 1: LLM 沒選任何頁面 → 用關鍵字比對（不限數量，所有 score>0 都帶）
     if not selected:
-        selected = _keyword_match(question, all_pages, max_pages)
+        selected = _keyword_match(question, all_pages)
 
-    # Fallback 2: 還是沒選到 → 最新 max_pages 頁
+    # Fallback 2: 真的零匹配 → 最新 max_pages 頁（沒任何線索時的最後一招）
     if not selected:
         selected = sorted(all_pages, key=lambda p: p.updated_at, reverse=True)[:max_pages]
 
-    return selected[:max_pages]
+    return selected
 
 
 async def run_query(
@@ -378,10 +382,11 @@ async def run_query(
     decision = await route_query(question, all_pages, history)
     if not decision.need_wiki:
         answer = await chat_only_reply(question, persona, history)
+        # 不存 question / route_reason 等 LLM 自由文字，避免洩漏使用者隱私
         db.add(ActivityLog(
             api_key_id=api_key_id,
             action="chat",
-            details={"question": question, "route_reason": decision.reason},
+            details={},
         ))
         await db.commit()
         return {
@@ -459,7 +464,7 @@ async def run_query(
     db.add(ActivityLog(
         api_key_id=api_key_id,
         action="query",
-        details={"question": question, "pages_referenced": len(pages), "saved_to_wiki": save_to_wiki},
+        details={"pages_referenced": len(pages), "saved_to_wiki": save_to_wiki},
     ))
     await db.commit()
 
@@ -513,7 +518,7 @@ async def run_query_stream(
             db.add(ActivityLog(
                 api_key_id=api_key_id,
                 action="chat",
-                details={"question": question, "route_reason": decision.reason},
+                details={},
             ))
             await db.commit()
             yield json.dumps({"type": "done"}) + "\n"
@@ -566,12 +571,9 @@ async def run_query_stream(
             api_key_id=api_key_id,
             action="query",
             details={
-                "question": question,
                 "pages_referenced": len(pages),
                 "save_decision": save_decision,
-                "save_reason": save_reason,
-                "refine_summary": refine_summary,
-                "edits_applied": applied_edits,
+                "edits_applied": applied_edits,  # 只有 wiki 頁的 slug/title，已在 wiki_pages 表中
             },
         ))
         await db.commit()

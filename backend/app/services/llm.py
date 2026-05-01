@@ -11,8 +11,15 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from app.core.config import get_settings
+from app.core.end_user import current_end_user
 
 logger = logging.getLogger(__name__)
+
+
+def _user_kwargs() -> dict:
+    """讀 contextvar，若有值就回傳 {'user': '...'} 供 OpenAI client / LangChain bind。"""
+    user = current_end_user.get()
+    return {"user": user} if user else {}
 
 settings = get_settings()
 client = AsyncOpenAI(
@@ -91,7 +98,7 @@ async def structured_call(
     策略：先試 function_calling（tool call），失敗則退回手動 JSON 解析。
     對 Ollama / thinking model 也能穩定工作。
     """
-    chat = _chat.bind(max_tokens=max_tokens)
+    chat = _chat.bind(max_tokens=max_tokens, **_user_kwargs())
 
     # Pass 1: tool calling with include_raw to inspect failures
     try:
@@ -166,6 +173,7 @@ async def call_llm(
         model=settings.LLM_MODEL,
         max_tokens=max_tokens,
         messages=[{"role": "system", "content": system}, *normalized],
+        **_user_kwargs(),
     )
     return response.choices[0].message.content or ""
 
@@ -187,6 +195,7 @@ async def stream_llm(
         max_tokens=max_tokens,
         messages=[{"role": "system", "content": system}, *normalized],
         stream=True,
+        **_user_kwargs(),
     )
     async for chunk in stream:
         if not chunk.choices:
@@ -233,7 +242,7 @@ async def vision_structured_call(
     Pass 1: LangChain function_calling（tool）—— 多數 vision model 支援不穩，會 fallback
     Pass 2: 嚴格 JSON prompt + 手動 parse（保留 multimodal content）
     """
-    chat = _vision_chat.bind(max_tokens=max_tokens)
+    chat = _vision_chat.bind(max_tokens=max_tokens, **_user_kwargs())
 
     # Pass 1: tool calling
     try:
@@ -271,6 +280,7 @@ async def vision_structured_call(
             {"role": "user", "content": user_content},
         ],
         max_tokens=max_tokens,
+        **_user_kwargs(),
     )
     raw_text = _strip_think(resp.choices[0].message.content or "")
     obj_str = _extract_json_obj(raw_text)
@@ -299,7 +309,16 @@ def build_document_message(file_path: str, text_content: str | None = None) -> d
                     "type": "image_url",
                     "image_url": {"url": f"data:{media_type};base64,{data}"},
                 },
-                {"type": "text", "text": "請分析以上圖片內容"},
+                {
+                    "type": "text",
+                    "text": (
+                        "請把這張圖片當成一份文件處理：\n"
+                        "1. 先做 OCR：完整、原樣抽出圖片中所有可見文字（含標題、段落、表格、欄位、註解、圖說、手寫字），保留原本順序與層級。表格用 Markdown 表格還原。\n"
+                        "2. 再描述視覺資訊：圖表、流程圖、示意圖、人物動作、場景重點、關鍵物件。\n"
+                        "3. 把以上內容當作這份文件的『正文』，依此產生 wiki 頁面，不要只回答『這是一張圖片』或泛泛描述。\n"
+                        "4. 若圖片完全沒有文字，至少抽出主題、實體、概念，仍需產生有實質內容的 wiki 頁面。"
+                    ),
+                },
             ],
         }
     elif suffix == ".pdf":

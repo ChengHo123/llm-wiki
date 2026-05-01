@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
-from app.api.v1 import auth, documents, wiki, query, linebot
+from app.api.v1 import admin, auth, documents, wiki, query, linebot
 from app.api.v1.linebot import warmup_line_client, close_line_client
 from app.services.ingest_queue import start_worker, stop_worker
 
@@ -39,6 +39,7 @@ app.include_router(documents.router, prefix="/api/v1", tags=["Documents"])
 app.include_router(wiki.router, prefix="/api/v1", tags=["Wiki"])
 app.include_router(query.router, prefix="/api/v1", tags=["Query"])
 app.include_router(linebot.router, prefix="/api/v1", tags=["LINE Bot"])
+app.include_router(admin.router, prefix="/api/v1", tags=["Admin"])
 
 
 @app.get("/health")

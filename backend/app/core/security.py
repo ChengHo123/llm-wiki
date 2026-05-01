@@ -8,7 +8,9 @@ from sqlalchemy import select
 
 from app.db.session import get_db
 from app.models.api_key import ApiKey
+from app.models.line_user_binding import LineUserBinding
 from app.models.web_session import WebSession
+from app.core.end_user import current_end_user, line_tag, web_tag
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 session_token_header = APIKeyHeader(name="X-Session-Token", auto_error=False)
@@ -26,6 +28,16 @@ def generate_session_token() -> str:
     return f"ws_{secrets.token_urlsafe(48)}"
 
 
+async def _set_end_user_for(api_key: ApiKey, db: AsyncSession) -> None:
+    """查 line_user_bindings，把 contextvar 設成 line-{user_id} 或 web-{api_key_id}。"""
+    binding = (
+        await db.execute(
+            select(LineUserBinding).where(LineUserBinding.api_key_id == api_key.id)
+        )
+    ).scalar_one_or_none()
+    current_end_user.set(line_tag(binding.line_user_id) if binding else web_tag(api_key.id))
+
+
 async def get_current_key(
     raw_key: str | None = Security(api_key_header),
     session_token: str | None = Security(session_token_header),
@@ -35,6 +47,7 @@ async def get_current_key(
         result = await db.execute(select(ApiKey).where(ApiKey.key_hash == hash_key(raw_key)))
         api_key = result.scalar_one_or_none()
         if api_key:
+            await _set_end_user_for(api_key, db)
             return api_key
 
     if session_token:
@@ -49,6 +62,7 @@ async def get_current_key(
             result = await db.execute(select(ApiKey).where(ApiKey.id == session.api_key_id))
             api_key = result.scalar_one_or_none()
             if api_key:
+                await _set_end_user_for(api_key, db)
                 return api_key
 
     raise HTTPException(

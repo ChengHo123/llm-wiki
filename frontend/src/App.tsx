@@ -5,6 +5,10 @@ import WikiPage from './pages/Wiki'
 import QueryPage from './pages/Query'
 import GraphPage from './pages/Graph'
 import MobilePage from './pages/Mobile'
+import AdminLogin from './pages/AdminLogin'
+import AdminUsers from './pages/AdminUsers'
+import AdminUserDetail from './pages/AdminUserDetail'
+import AdminOverview from './pages/AdminOverview'
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -56,6 +60,13 @@ export default function App() {
       <Routes>
         {/* Mobile route — no sidebar */}
         <Route path="/m" element={<MobilePage />} />
+
+        {/* Admin routes — no sidebar */}
+        <Route path="/admin/login" element={<AdminLogin />} />
+        <Route path="/admin" element={<AdminOverview />} />
+        <Route path="/admin/overview" element={<AdminOverview />} />
+        <Route path="/admin/users" element={<AdminUsers />} />
+        <Route path="/admin/users/:id" element={<AdminUserDetail />} />
 
         {/* Desktop routes */}
         <Route path="/"      element={<Layout><HomePage /></Layout>} />

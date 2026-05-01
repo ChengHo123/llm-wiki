@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.end_user import current_end_user, line_tag
 from app.core.security import generate_api_key, generate_session_token, hash_key
 from app.db.session import AsyncSessionLocal
 from app.models.api_key import ApiKey
@@ -363,6 +364,8 @@ async def _build_knowledge_summary(api_key: ApiKey) -> str:
 
 async def _handle_postback(reply_token: str, user_id: str, data: str) -> None:
     """處理 quick reply / rich menu 按鈕觸發的 postback。"""
+    if user_id:
+        current_end_user.set(line_tag(user_id))
     await _show_loading(user_id, 30)
     params = dict(p.split("=", 1) for p in data.split("&") if "=" in p)
     action = params.get("action")
@@ -432,6 +435,8 @@ async def _handle_follow_event(user_id: str) -> None:
 
 async def _handle_text_event(reply_token: str, user_id: str, question: str) -> None:
     logger.info("LINE event: user=%s question=%r", user_id[:8] if user_id else "?", question[:60])
+    if user_id:
+        current_end_user.set(line_tag(user_id))
     await _show_loading(user_id, 60)
 
     if question.strip() in GET_LINK_KEYWORDS:

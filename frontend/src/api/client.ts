@@ -227,6 +227,157 @@ export interface ChatHistoryMsg {
   content: string
 }
 
+// ── Admin ───────────────────────────────────────────────
+const adminApi = axios.create({
+  baseURL: '/api/v1',
+  withCredentials: true,
+})
+
+export interface AdminUserSummary {
+  api_key_id: string
+  name: string
+  line_user_id: string | null
+  end_user_tag: string
+  created_at: string
+  document_count: number
+  wiki_page_count: number
+  in_progress_count: number
+  chat_count: number
+}
+
+export interface AdminUserDetail {
+  summary: AdminUserSummary
+  documents: Document[]
+}
+
+export interface AdminKpi {
+  total_users: number
+  dau: number
+  wau: number
+  mau: number
+  new_users_this_week: number
+  new_users_last_week: number
+  total_documents: number
+  total_wiki_pages: number
+  queue_depth: number
+  range_ingest_total: number
+  range_ingest_done: number
+  range_ingest_error: number
+  range_success_rate: number | null
+  range_query_count: number
+}
+
+export interface AdminRange {
+  start: string  // YYYY-MM-DD
+  end: string
+  days: number
+}
+
+export interface AdminLeaderEntry {
+  api_key_id: string
+  name: string
+  line_user_id: string | null
+  value: number
+}
+
+export interface AdminTrendPoint {
+  date: string  // YYYY-MM-DD
+  ingest_done: number
+  ingest_error: number
+  ingest_total: number
+  query_count: number
+}
+
+export interface AdminOverview {
+  range: AdminRange
+  kpi: AdminKpi
+  top_uploaders: AdminLeaderEntry[]
+  top_queriers: AdminLeaderEntry[]
+  top_wiki: AdminLeaderEntry[]
+  trends: AdminTrendPoint[]
+}
+
+export async function adminLogin(username: string, password: string): Promise<void> {
+  await adminApi.post('/admin/login', { username, password })
+}
+
+export async function adminLogout(): Promise<void> {
+  await adminApi.post('/admin/logout')
+}
+
+export async function adminMe(): Promise<{ ok: boolean }> {
+  const res = await adminApi.get('/admin/me')
+  return res.data
+}
+
+export async function adminListUsers(): Promise<AdminUserSummary[]> {
+  const res = await adminApi.get('/admin/users')
+  return res.data
+}
+
+export async function adminOverview(start?: string, end?: string): Promise<AdminOverview> {
+  const res = await adminApi.get('/admin/overview', {
+    params: { start_date: start, end_date: end },
+  })
+  return res.data
+}
+
+export interface AdminSpendUser {
+  api_key_id: string | null
+  name: string
+  line_user_id: string | null
+  end_user_tag: string
+  call_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  spend_usd: number
+}
+
+export interface AdminSpendModel {
+  model: string
+  call_count: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  spend_usd: number
+}
+
+export interface AdminSpend {
+  range: AdminRange
+  total_call_count: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  total_tokens: number
+  total_spend_usd: number
+  untagged_call_count: number
+  untagged_tokens: number
+  by_user: AdminSpendUser[]
+  by_model: AdminSpendModel[]
+  fetched_count: number
+  note: string | null
+}
+
+export async function adminSpend(start?: string, end?: string): Promise<AdminSpend> {
+  const res = await adminApi.get('/admin/spend', {
+    params: { start_date: start, end_date: end },
+  })
+  return res.data
+}
+
+export async function adminUserDetail(apiKeyId: string): Promise<AdminUserDetail> {
+  const res = await adminApi.get(`/admin/users/${apiKeyId}`)
+  return res.data
+}
+
+export async function adminRetryDocument(documentId: string): Promise<void> {
+  await adminApi.post(`/admin/documents/${documentId}/retry`)
+}
+
+export async function adminStopDocument(documentId: string): Promise<void> {
+  await adminApi.post(`/admin/documents/${documentId}/stop`)
+}
+
 export async function* queryWikiStream(
   question: string,
   history: ChatHistoryMsg[] = [],

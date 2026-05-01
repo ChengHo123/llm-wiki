@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # Frontend URL（用於 LINE bot 推送登入連結）
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Admin 後台帳密（單一管理員，所有 admin endpoint 共用）
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = "admin"
+
     class Config:
         env_file = ".env"
 
