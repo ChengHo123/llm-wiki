@@ -110,14 +110,14 @@ function GraphView({ onBack, onOpenPage }: { onBack: () => void; onOpenPage: (id
   }, [])
 
   return (
-    <div className="fixed inset-0 z-30 bg-gray-50 flex flex-col">
-      <header className="h-14 bg-white border-b border-gray-200 flex items-center px-3 gap-2">
-        <button onClick={onBack} className="p-2 -ml-2 text-gray-600">
+    <div className="fixed inset-0 z-30 bg-gray-50 dark:bg-zinc-950 flex flex-col">
+      <header className="h-14 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-700 flex items-center px-3 gap-2">
+        <button onClick={onBack} className="p-2 -ml-2 text-gray-600 dark:text-zinc-400">
           <ArrowLeft size={20} />
         </button>
-        <h1 className="font-semibold text-gray-800">知識圖譜</h1>
+        <h1 className="font-semibold text-gray-800 dark:text-zinc-100">知識圖譜</h1>
         {data && (
-          <span className="text-xs text-gray-400 ml-auto">
+          <span className="text-xs text-gray-400 dark:text-zinc-500 ml-auto">
             {data.nodes.length} 頁 · {data.links.length} 連結
           </span>
         )}
@@ -134,7 +134,7 @@ function GraphView({ onBack, onOpenPage }: { onBack: () => void; onOpenPage: (id
           </div>
         )}
         {!loading && data && data.nodes.length === 0 && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 px-6 text-center">
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 dark:text-zinc-500 px-6 text-center">
             <Network size={36} className="mb-2 opacity-30" />
             <p className="text-sm">尚無 wiki 頁面，先上傳文件給嚕比</p>
           </div>
@@ -190,33 +190,33 @@ function WikiListView({
     : pages
 
   return (
-    <div className="fixed inset-0 z-30 bg-gray-50 flex flex-col">
-      <header className="h-14 bg-white border-b border-gray-200 flex items-center px-3 gap-2 shrink-0">
-        <button onClick={onBack} className="p-2 -ml-2 text-gray-600">
+    <div className="fixed inset-0 z-30 bg-gray-50 dark:bg-zinc-950 flex flex-col">
+      <header className="h-14 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-700 flex items-center px-3 gap-2 shrink-0">
+        <button onClick={onBack} className="p-2 -ml-2 text-gray-600 dark:text-zinc-400">
           <ArrowLeft size={20} />
         </button>
-        <h1 className="font-semibold text-gray-800">Wiki 頁面</h1>
-        <span className="text-xs text-gray-400 ml-auto">{pages.length} 頁</span>
+        <h1 className="font-semibold text-gray-800 dark:text-zinc-100">Wiki 頁面</h1>
+        <span className="text-xs text-gray-400 dark:text-zinc-500 ml-auto">{pages.length} 頁</span>
       </header>
 
-      <div className="px-4 py-3 bg-white border-b border-gray-100 shrink-0">
+      <div className="px-4 py-3 bg-white dark:bg-zinc-900 border-b border-gray-100 dark:border-zinc-800 shrink-0">
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="搜尋標題…"
-          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+          className="w-full border border-gray-200 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-100 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-700 placeholder:text-gray-400 dark:placeholder:text-zinc-500"
         />
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {loading ? (
           <div className="flex justify-center py-16">
-            <RefreshCw size={24} className="animate-spin text-gray-400" />
+            <RefreshCw size={24} className="animate-spin text-gray-400 dark:text-zinc-500" />
           </div>
         ) : error ? (
           <p className="text-sm text-red-500 text-center py-16">{error}</p>
         ) : filtered.length === 0 ? (
-          <div className="text-center py-16 text-gray-400">
+          <div className="text-center py-16 text-gray-400 dark:text-zinc-500">
             <BookOpen size={36} className="mx-auto mb-2 opacity-30" />
             <p className="text-sm">{pages.length === 0 ? '還沒有 wiki 頁面' : '沒有符合的頁面'}</p>
           </div>
@@ -226,20 +226,20 @@ function WikiListView({
               <li key={page.id}>
                 <button
                   onClick={() => onOpenPage(page.id)}
-                  className="w-full bg-white border border-gray-200 rounded-2xl px-4 py-3 text-left active:bg-gray-50 flex items-start gap-2"
+                  className="w-full bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-2xl px-4 py-3 text-left active:bg-gray-50 dark:active:bg-zinc-800 flex items-start gap-2"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_BADGE[page.page_type] || 'bg-gray-100 text-gray-600'}`}>
                         {PAGE_TYPE_LABEL[page.page_type] || page.page_type}
                       </span>
-                      <span className="text-[10px] text-gray-400 ml-auto">
+                      <span className="text-[10px] text-gray-400 dark:text-zinc-500 ml-auto">
                         {new Date(page.updated_at).toLocaleDateString('zh-TW')}
                       </span>
                     </div>
-                    <h3 className="font-medium text-gray-800 text-sm leading-snug">{page.title}</h3>
+                    <h3 className="font-medium text-gray-800 dark:text-zinc-200 text-sm leading-snug">{page.title}</h3>
                   </div>
-                  <ChevronRight size={16} className="text-gray-300 flex-shrink-0 mt-1" />
+                  <ChevronRight size={16} className="text-gray-300 dark:text-zinc-600 flex-shrink-0 mt-1" />
                 </button>
               </li>
             ))}
@@ -303,18 +303,18 @@ function WikiDetailView({
   }
 
   return (
-    <div className="fixed inset-0 z-30 bg-gray-50 flex flex-col">
-      <header className="h-14 bg-white border-b border-gray-200 flex items-center px-3 gap-2 shrink-0">
-        <button onClick={onBack} className="p-2 -ml-2 text-gray-600">
+    <div className="fixed inset-0 z-30 bg-gray-50 dark:bg-zinc-950 flex flex-col">
+      <header className="h-14 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-700 flex items-center px-3 gap-2 shrink-0">
+        <button onClick={onBack} className="p-2 -ml-2 text-gray-600 dark:text-zinc-400">
           <ArrowLeft size={20} />
         </button>
-        <h1 className="font-semibold text-gray-800 flex-1 truncate">
+        <h1 className="font-semibold text-gray-800 dark:text-zinc-100 flex-1 truncate">
           {page?.title || 'Wiki 頁面'}
         </h1>
         {page && (
           <button
             onClick={handleDelete}
-            className="p-2 -mr-2 text-gray-300 active:text-red-500"
+            className="p-2 -mr-2 text-gray-300 dark:text-zinc-600 active:text-red-500"
             title="刪除"
           >
             <Trash2 size={16} />
@@ -325,7 +325,7 @@ function WikiDetailView({
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex justify-center py-16">
-            <RefreshCw size={24} className="animate-spin text-gray-400" />
+            <RefreshCw size={24} className="animate-spin text-gray-400 dark:text-zinc-500" />
           </div>
         ) : error || !page ? (
           <p className="text-sm text-red-500 text-center py-16">{error || '頁面不存在'}</p>
@@ -335,11 +335,11 @@ function WikiDetailView({
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_BADGE[page.page_type] || 'bg-gray-100 text-gray-600'}`}>
                 {PAGE_TYPE_LABEL[page.page_type] || page.page_type}
               </span>
-              <span className="text-[10px] text-gray-400">
+              <span className="text-[10px] text-gray-400 dark:text-zinc-500">
                 更新：{new Date(page.updated_at).toLocaleDateString('zh-TW')}
               </span>
             </div>
-            <h1 className="text-xl font-bold text-gray-800 mb-3 leading-tight">{page.title}</h1>
+            <h1 className="text-xl font-bold text-gray-800 dark:text-zinc-100 mb-3 leading-tight">{page.title}</h1>
             <div className="prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_img]:max-w-full [&_table]:block [&_table]:overflow-x-auto">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
@@ -351,7 +351,7 @@ function WikiDetailView({
                         <button
                           type="button"
                           onClick={() => onOpenPage(id)}
-                          className="text-blue-600 underline"
+                          className="text-blue-600 dark:text-blue-400 underline"
                         >
                           {children}
                         </button>
@@ -435,10 +435,10 @@ export default function MobilePage() {
 
   if (!apiKey) {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 text-center">
+      <div className="min-h-screen bg-gray-50 dark:bg-zinc-950 flex flex-col items-center justify-center p-6 text-center">
         <Network size={42} className="text-blue-400 mb-3 opacity-60" />
-        <h1 className="text-lg font-semibold text-gray-700 mb-2">嚕比的 wiki</h1>
-        <p className="text-sm text-gray-500">
+        <h1 className="text-lg font-semibold text-gray-700 dark:text-zinc-200 mb-2">嚕比的 wiki</h1>
+        <p className="text-sm text-gray-500 dark:text-zinc-400">
           請從 LINE 傳「取得連結」訊息給嚕比，<br />
           點 bot 回的網址進來。
         </p>
@@ -463,11 +463,11 @@ export default function MobilePage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 h-14 flex items-center">
-        <h1 className="font-semibold text-gray-800 flex-1 truncate">嚕比的 wiki</h1>
-        <span className="text-xs text-gray-400 mr-2 truncate max-w-[120px]">{activeName}</span>
-        <button onClick={handleLogout} className="p-2 -mr-2 text-gray-400 hover:text-red-500" title="登出">
+    <div className="min-h-screen bg-gray-50 dark:bg-zinc-950">
+      <header className="sticky top-0 z-10 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-700 px-4 h-14 flex items-center">
+        <h1 className="font-semibold text-gray-800 dark:text-zinc-100 flex-1 truncate">嚕比的 wiki</h1>
+        <span className="text-xs text-gray-400 dark:text-zinc-500 mr-2 truncate max-w-[120px]">{activeName}</span>
+        <button onClick={handleLogout} className="p-2 -mr-2 text-gray-400 dark:text-zinc-500 hover:text-red-500" title="登出">
           <LogOut size={18} />
         </button>
       </header>
@@ -477,38 +477,40 @@ export default function MobilePage() {
           <div
             {...getRootProps()}
             className={`border-2 border-dashed rounded-2xl py-10 px-4 text-center transition-colors ${
-              isDragActive ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white'
+              isDragActive
+                ? 'border-blue-400 bg-blue-50 dark:bg-blue-950'
+                : 'border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-900'
             }`}
           >
             <input {...getInputProps()} />
-            <Upload size={32} className="mx-auto mb-3 text-gray-400" />
+            <Upload size={32} className="mx-auto mb-3 text-gray-400 dark:text-zinc-500" />
             {uploading ? (
-              <p className="text-blue-600 font-medium">上傳中…</p>
+              <p className="text-blue-600 dark:text-blue-400 font-medium">上傳中…</p>
             ) : (
               <>
-                <p className="text-gray-700 font-medium mb-1">點擊或拖放上傳</p>
-                <p className="text-xs text-gray-400">PDF、圖片、TXT、Markdown</p>
+                <p className="text-gray-700 dark:text-zinc-200 font-medium mb-1">點擊或拖放上傳</p>
+                <p className="text-xs text-gray-400 dark:text-zinc-500">PDF、圖片、TXT、Markdown</p>
               </>
             )}
           </div>
         </section>
 
-        <section className="bg-white rounded-2xl border border-gray-200 p-4">
+        <section className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-700 p-4">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold text-gray-700 text-sm">已上傳 ({docs.length})</h2>
-            <button onClick={loadDocs} className="text-gray-400 active:text-gray-600 p-1">
+            <h2 className="font-semibold text-gray-700 dark:text-zinc-200 text-sm">已上傳 ({docs.length})</h2>
+            <button onClick={loadDocs} className="text-gray-400 dark:text-zinc-500 active:text-gray-600 dark:active:text-zinc-300 p-1">
               <RefreshCw size={14} />
             </button>
           </div>
           {docs.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-6">還沒上傳任何文件</p>
+            <p className="text-sm text-gray-400 dark:text-zinc-500 text-center py-6">還沒上傳任何文件</p>
           ) : (
-            <ul className="divide-y divide-gray-100">
+            <ul className="divide-y divide-gray-100 dark:divide-zinc-800">
               {docs.map((doc) => (
                 <li key={doc.id} className="flex items-center gap-2 py-2.5">
-                  <FileText size={16} className="text-gray-400 flex-shrink-0" />
-                  <span className="flex-1 text-sm text-gray-700 truncate">{doc.filename}</span>
-                  <div className="flex items-center gap-1 text-xs text-gray-500 flex-shrink-0">
+                  <FileText size={16} className="text-gray-400 dark:text-zinc-500 flex-shrink-0" />
+                  <span className="flex-1 text-sm text-gray-700 dark:text-zinc-200 truncate">{doc.filename}</span>
+                  <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-zinc-400 flex-shrink-0">
                     {STATUS_ICON[doc.status] ?? <Clock size={16} />}
                     <span>{STATUS_LABEL[doc.status] ?? doc.status}</span>
                   </div>
@@ -518,7 +520,7 @@ export default function MobilePage() {
                         try { await retryDocument(doc.id); await loadDocs() }
                         catch { setError('重試失敗') }
                       }}
-                      className="text-gray-300 active:text-blue-500 p-1 -mr-1"
+                      className="text-gray-300 dark:text-zinc-600 active:text-blue-500 p-1 -mr-1"
                       title="重試"
                     >
                       <RotateCcw size={15} />
@@ -530,7 +532,7 @@ export default function MobilePage() {
                       try { await deleteDocument(doc.id); await loadDocs() }
                       catch { setError('刪除失敗') }
                     }}
-                    className="text-gray-300 active:text-red-500 p-1 -mr-1"
+                    className="text-gray-300 dark:text-zinc-600 active:text-red-500 p-1 -mr-1"
                     title="刪除"
                   >
                     <Trash2 size={15} />
@@ -543,7 +545,7 @@ export default function MobilePage() {
 
         <button
           onClick={() => setView('wiki-list')}
-          className="w-full bg-white border border-gray-200 rounded-2xl py-4 flex items-center justify-center gap-2 text-gray-700 font-medium active:bg-gray-50"
+          className="w-full bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-2xl py-4 flex items-center justify-center gap-2 text-gray-700 dark:text-zinc-200 font-medium active:bg-gray-50 dark:active:bg-zinc-800"
         >
           <BookOpen size={18} className="text-blue-500" />
           看 Wiki 頁面
@@ -551,14 +553,14 @@ export default function MobilePage() {
 
         <button
           onClick={() => setView('graph')}
-          className="w-full bg-white border border-gray-200 rounded-2xl py-4 flex items-center justify-center gap-2 text-gray-700 font-medium active:bg-gray-50"
+          className="w-full bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-2xl py-4 flex items-center justify-center gap-2 text-gray-700 dark:text-zinc-200 font-medium active:bg-gray-50 dark:active:bg-zinc-800"
         >
           <Network size={18} className="text-blue-500" />
           看知識圖譜
         </button>
 
         {error && (
-          <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
+          <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950 rounded-lg px-3 py-2">{error}</p>
         )}
       </main>
     </div>

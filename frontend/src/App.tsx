@@ -10,18 +10,19 @@ import AdminUsers from './pages/AdminUsers'
 import AdminUserDetail from './pages/AdminUserDetail'
 import AdminOverview from './pages/AdminOverview'
 import AdminLogs from './pages/AdminLogs'
+import ThemeToggle from './components/ThemeToggle'
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="min-h-screen bg-gray-50 dark:bg-zinc-950 flex">
       {/* Sidebar */}
-      <nav className="w-56 bg-white border-r border-gray-200 flex flex-col flex-shrink-0">
-        <div className="p-4 border-b border-gray-200">
+      <nav className="w-56 bg-white dark:bg-zinc-900 border-r border-gray-200 dark:border-zinc-700 flex flex-col flex-shrink-0">
+        <div className="p-4 border-b border-gray-200 dark:border-zinc-700">
           <div className="flex items-center gap-2">
             <BookOpen className="text-blue-600" size={22} />
-            <span className="font-bold text-gray-800">LLM Wiki</span>
+            <span className="font-bold text-gray-800 dark:text-zinc-100">LLM Wiki</span>
           </div>
-          <p className="text-xs text-gray-400 mt-1">個人知識庫</p>
+          <p className="text-xs text-gray-400 dark:text-zinc-500 mt-1">個人知識庫</p>
         </div>
         <div className="flex-1 p-3 space-y-1">
           {[
@@ -37,8 +38,8 @@ function Layout({ children }: { children: React.ReactNode }) {
               className={({ isActive }) =>
                 `flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
                   isActive
-                    ? 'bg-blue-50 text-blue-700 font-medium'
-                    : 'text-gray-600 hover:bg-gray-100'
+                    ? 'bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-medium'
+                    : 'text-gray-600 dark:text-zinc-400 hover:bg-gray-100 dark:hover:bg-zinc-800'
                 }`
               }
             >
@@ -46,6 +47,9 @@ function Layout({ children }: { children: React.ReactNode }) {
               {label}
             </NavLink>
           ))}
+        </div>
+        <div className="p-3 border-t border-gray-200 dark:border-zinc-700 flex justify-end">
+          <ThemeToggle />
         </div>
       </nav>
 

@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 /* Markdown prose styles */
+.prose { @apply text-gray-800; }
 .prose h1 { @apply text-2xl font-bold mt-6 mb-3; }
 .prose h2 { @apply text-xl font-semibold mt-5 mb-2; }
 .prose h3 { @apply text-lg font-semibold mt-4 mb-2; }
@@ -18,3 +19,16 @@
 .prose table { @apply w-full border-collapse mb-4; }
 .prose th { @apply border border-gray-300 bg-gray-50 px-3 py-2 text-left font-semibold; }
 .prose td { @apply border border-gray-300 px-3 py-2; }
+
+/* Dark mode prose */
+.dark .prose { @apply text-zinc-200; }
+.dark .prose h1,
+.dark .prose h2,
+.dark .prose h3 { @apply text-zinc-100; }
+.dark .prose code { @apply bg-zinc-700 text-zinc-200; }
+.dark .prose pre  { @apply bg-zinc-900 text-zinc-100; }
+.dark .prose blockquote { @apply border-blue-500 text-zinc-400; }
+.dark .prose a { @apply text-blue-400; }
+.dark .prose a:hover { @apply text-blue-300; }
+.dark .prose th { @apply border-zinc-600 bg-zinc-800 text-zinc-200; }
+.dark .prose td { @apply border-zinc-600 text-zinc-300; }

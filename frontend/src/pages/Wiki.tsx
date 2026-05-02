@@ -5,10 +5,10 @@ import { BookOpen, ChevronLeft, AlertTriangle, RefreshCw, Trash2, Wand2, Loader2
 import { listWikiPages, getWikiPage, lintWiki, deleteWikiPage, applyLintFixes, type WikiPageSummary, type WikiPageDetail, type LintIssue } from '../api/client'
 
 const PAGE_TYPE_COLOR: Record<string, string> = {
-  index: 'bg-purple-100 text-purple-700',
-  summary: 'bg-blue-100 text-blue-700',
-  entity: 'bg-green-100 text-green-700',
-  concept: 'bg-orange-100 text-orange-700',
+  index: 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300',
+  summary: 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
+  entity: 'bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300',
+  concept: 'bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300',
 }
 
 export default function WikiPage() {
@@ -85,7 +85,7 @@ export default function WikiPage() {
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={() => setSelected(null)}
-            className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+            className="flex items-center gap-1 text-sm text-gray-500 dark:text-zinc-400 hover:text-gray-700 dark:hover:text-zinc-200"
           >
             <ChevronLeft size={16} /> 返回列表
           </button>
@@ -104,15 +104,15 @@ export default function WikiPage() {
           </button>
         </div>
         <div className="flex items-center gap-2 mb-1">
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_COLOR[selected.page_type] || 'bg-gray-100 text-gray-600'}`}>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_COLOR[selected.page_type] || 'bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-zinc-400'}`}>
             {selected.page_type}
           </span>
         </div>
-        <h1 className="text-2xl font-bold text-gray-800 mb-4">{selected.title}</h1>
-        <div className="bg-white rounded-xl border border-gray-200 p-6 prose max-w-none">
+        <h1 className="text-2xl font-bold text-gray-800 dark:text-zinc-100 mb-4">{selected.title}</h1>
+        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-700 p-6 prose max-w-none">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.content}</ReactMarkdown>
         </div>
-        <p className="text-xs text-gray-400 mt-3">最後更新：{new Date(selected.updated_at).toLocaleString('zh-TW')}</p>
+        <p className="text-xs text-gray-400 dark:text-zinc-500 mt-3">最後更新：{new Date(selected.updated_at).toLocaleString('zh-TW')}</p>
       </div>
     )
   }
@@ -121,13 +121,13 @@ export default function WikiPage() {
     <div className="p-8 max-w-3xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">Wiki 頁面</h1>
-          <p className="text-sm text-gray-500 mt-1">{pages.length} 個頁面</p>
+          <h1 className="text-2xl font-bold text-gray-800 dark:text-zinc-100">Wiki 頁面</h1>
+          <p className="text-sm text-gray-500 dark:text-zinc-400 mt-1">{pages.length} 個頁面</p>
         </div>
         <button
           onClick={handleLint}
           disabled={linting}
-          className="flex items-center gap-2 bg-amber-50 border border-amber-300 text-amber-700 px-3 py-2 rounded-lg text-sm hover:bg-amber-100 disabled:opacity-50"
+          className="flex items-center gap-2 bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 px-3 py-2 rounded-lg text-sm hover:bg-amber-100 dark:hover:bg-amber-900 disabled:opacity-50"
         >
           {linting ? <RefreshCw size={14} className="animate-spin" /> : <AlertTriangle size={14} />}
           健檢 Wiki
@@ -135,19 +135,19 @@ export default function WikiPage() {
       </div>
 
       {error && (
-        <p className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
+        <p className="mb-4 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950 rounded-lg px-3 py-2">{error}</p>
       )}
 
       {applyResult && (
-        <div className="mb-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+        <div className="mb-4 text-sm text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg px-3 py-2">
           已套用 {applyResult.applied} 頁{applyResult.skipped > 0 ? `，略過 ${applyResult.skipped}` : ''}。可重新執行健檢驗證。
         </div>
       )}
 
       {lintReport && (
-        <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4">
+        <div className="mb-6 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-xl p-4">
           <div className="flex items-start justify-between gap-3 mb-2">
-            <h3 className="font-semibold text-amber-800">健檢報告</h3>
+            <h3 className="font-semibold text-amber-800 dark:text-amber-300">健檢報告</h3>
             {lintReport.issues?.length > 0 && (
               <button
                 onClick={handleApplyAll}
@@ -159,8 +159,8 @@ export default function WikiPage() {
               </button>
             )}
           </div>
-          <p className="text-sm text-amber-700 mb-3">{lintReport.summary}</p>
-          <div className="flex gap-4 text-xs text-amber-600 mb-3">
+          <p className="text-sm text-amber-700 dark:text-amber-400 mb-3">{lintReport.summary}</p>
+          <div className="flex gap-4 text-xs text-amber-600 dark:text-amber-500 mb-3">
             <span>總頁數：{lintReport.stats?.total_pages}</span>
             <span>孤立頁：{lintReport.stats?.orphan_pages}</span>
             <span>問題數：{lintReport.stats?.issues_found}</span>
@@ -168,23 +168,23 @@ export default function WikiPage() {
           {lintReport.issues?.length > 0 && (
             <ul className="space-y-2 max-h-96 overflow-y-auto">
               {lintReport.issues.map((issue: any, i: number) => (
-                <li key={i} className="text-xs bg-white rounded p-2 border border-amber-200 flex items-start gap-2">
+                <li key={i} className="text-xs bg-white dark:bg-zinc-900 rounded p-2 border border-amber-200 dark:border-amber-800 flex items-start gap-2">
                   <div className="flex-1 min-w-0">
                     <div>
-                      <span className={`font-medium ${issue.severity === 'high' ? 'text-red-600' : issue.severity === 'medium' ? 'text-orange-600' : 'text-yellow-600'}`}>
+                      <span className={`font-medium ${issue.severity === 'high' ? 'text-red-600 dark:text-red-400' : issue.severity === 'medium' ? 'text-orange-600 dark:text-orange-400' : 'text-yellow-600 dark:text-yellow-400'}`}>
                         [{issue.severity}]
                       </span>{' '}
-                      <span className="text-gray-400">{issue.page_slug}</span>{' '}
-                      <span className="text-gray-700">{issue.description}</span>
+                      <span className="text-gray-400 dark:text-zinc-500">{issue.page_slug}</span>{' '}
+                      <span className="text-gray-700 dark:text-zinc-300">{issue.description}</span>
                     </div>
-                    {issue.suggestion && <p className="text-gray-500 mt-1">建議：{issue.suggestion}</p>}
+                    {issue.suggestion && <p className="text-gray-500 dark:text-zinc-400 mt-1">建議：{issue.suggestion}</p>}
                   </div>
                   {issue.page_slug && (
                     <button
                       onClick={() => runApply([issue as LintIssue], i)}
                       disabled={applying !== null}
                       title="套用此建議"
-                      className="shrink-0 flex items-center gap-1 text-xs border border-amber-300 text-amber-700 px-2 py-1 rounded hover:bg-amber-100 disabled:opacity-50"
+                      className="shrink-0 flex items-center gap-1 text-xs border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 px-2 py-1 rounded hover:bg-amber-100 dark:hover:bg-amber-900 disabled:opacity-50"
                     >
                       {applying === i ? <Loader2 size={10} className="animate-spin" /> : <Wand2 size={10} />}
                       套用
@@ -199,10 +199,10 @@ export default function WikiPage() {
 
       {loading ? (
         <div className="flex justify-center py-16">
-          <RefreshCw size={24} className="animate-spin text-gray-400" />
+          <RefreshCw size={24} className="animate-spin text-gray-400 dark:text-zinc-500" />
         </div>
       ) : pages.length === 0 ? (
-        <div className="text-center py-16 text-gray-400">
+        <div className="text-center py-16 text-gray-400 dark:text-zinc-500">
           <BookOpen size={40} className="mx-auto mb-3 opacity-30" />
           <p>尚未有 wiki 頁面，請先上傳文件</p>
         </div>
@@ -212,18 +212,18 @@ export default function WikiPage() {
             <button
               key={page.id}
               onClick={() => openPage(page.id)}
-              className="bg-white border border-gray-200 rounded-xl p-4 text-left hover:border-blue-300 hover:shadow-sm transition-all"
+              className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-xl p-4 text-left hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-sm transition-all"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_COLOR[page.page_type] || 'bg-gray-100 text-gray-600'}`}>
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_COLOR[page.page_type] || 'bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-zinc-400'}`}>
                       {page.page_type}
                     </span>
                   </div>
-                  <h3 className="font-medium text-gray-800 truncate">{page.title}</h3>
+                  <h3 className="font-medium text-gray-800 dark:text-zinc-200 truncate">{page.title}</h3>
                 </div>
-                <span className="text-xs text-gray-400 flex-shrink-0">
+                <span className="text-xs text-gray-400 dark:text-zinc-500 flex-shrink-0">
                   {new Date(page.updated_at).toLocaleDateString('zh-TW')}
                 </span>
               </div>

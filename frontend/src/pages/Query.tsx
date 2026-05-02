@@ -54,10 +54,10 @@ function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
   }, [done])
 
   return (
-    <div className="mb-3 border border-purple-200 rounded-lg bg-purple-50/50 overflow-hidden">
+    <div className="mb-3 border border-purple-200 dark:border-purple-800 rounded-lg bg-purple-50/50 dark:bg-purple-950/50 overflow-hidden">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-purple-700 hover:bg-purple-100/60"
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-purple-700 dark:text-purple-400 hover:bg-purple-100/60 dark:hover:bg-purple-900/60"
       >
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <Brain size={12} />
@@ -65,7 +65,7 @@ function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
         {!done && <Loader2 size={10} className="animate-spin" />}
       </button>
       {open && (
-        <div className="px-3 py-2 text-xs text-gray-600 whitespace-pre-wrap border-t border-purple-100 max-h-64 overflow-y-auto font-mono">
+        <div className="px-3 py-2 text-xs text-gray-600 dark:text-zinc-400 whitespace-pre-wrap border-t border-purple-100 dark:border-purple-800 max-h-64 overflow-y-auto font-mono">
           {text || '(尚未輸出)'}
         </div>
       )}
@@ -135,7 +135,6 @@ export default function QueryPage() {
     const question = input.trim()
     if (!question || loading) return
 
-    // 從現有 messages 抽出最近 20 則作為脈絡（送出前的快照）
     const history = messages
       .filter((m) => m.content && m.content.trim())
       .slice(-20)
@@ -229,10 +228,10 @@ export default function QueryPage() {
 
   return (
     <div className="flex flex-col h-screen">
-      <div className="p-4 border-b border-gray-200 bg-white flex items-center justify-between">
-        <h1 className="font-semibold text-gray-800">查詢 Wiki</h1>
+      <div className="p-4 border-b border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 flex items-center justify-between">
+        <h1 className="font-semibold text-gray-800 dark:text-zinc-100">查詢 Wiki</h1>
         <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-xs text-gray-500">
+          <span className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-zinc-400">
             <Brain size={12} className="text-purple-500" />
             自動判斷是否存入 Wiki
           </span>
@@ -240,7 +239,7 @@ export default function QueryPage() {
             onClick={handleCaptureAll}
             disabled={capturingAll || messages.length === 0}
             title="截圖整段對話"
-            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:text-blue-600 hover:border-blue-300 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-zinc-700 text-gray-600 dark:text-zinc-400 hover:text-blue-600 hover:border-blue-300 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {capturingAll ? <Loader2 size={12} className="animate-spin" /> : <Camera size={12} />}
             <span>截圖對話</span>
@@ -248,10 +247,10 @@ export default function QueryPage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6 bg-gray-50 dark:bg-zinc-950">
         <div ref={conversationRef} className="space-y-4">
         {messages.length === 0 && (
-          <div className="text-center py-16 text-gray-400">
+          <div className="text-center py-16 text-gray-400 dark:text-zinc-500">
             <BookOpen size={40} className="mx-auto mb-3 opacity-30" />
             <p className="font-medium">向你的知識庫提問</p>
             <p className="text-sm mt-1">答案來自你上傳的文件所建立的 wiki</p>
@@ -269,13 +268,13 @@ export default function QueryPage() {
                 <div className="relative group">
                   <div
                     ref={(el) => { bubbleRefs.current[i] = el }}
-                    className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm p-4"
+                    className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-2xl rounded-tl-sm p-4"
                   >
                   {msg.route_need_wiki === false && (
-                    <div className="mb-2 inline-flex items-center gap-1 text-xs text-gray-500 bg-gray-50 border border-gray-200 px-2 py-0.5 rounded-full">
+                    <div className="mb-2 inline-flex items-center gap-1 text-xs text-gray-500 dark:text-zinc-400 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 px-2 py-0.5 rounded-full">
                       <MessageCircle size={10} />
                       <span>閒聊模式</span>
-                      {msg.route_reason && <span className="text-gray-400">— {msg.route_reason}</span>}
+                      {msg.route_reason && <span className="text-gray-400 dark:text-zinc-500">— {msg.route_reason}</span>}
                     </div>
                   )}
 
@@ -295,13 +294,13 @@ export default function QueryPage() {
                   )}
 
                   {msg.referenced_pages && msg.referenced_pages.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-gray-100">
-                      <p className="text-xs text-gray-400 mb-1">參考頁面：</p>
+                    <div className="mt-3 pt-3 border-t border-gray-100 dark:border-zinc-800">
+                      <p className="text-xs text-gray-400 dark:text-zinc-500 mb-1">參考頁面：</p>
                       <div className="flex flex-wrap gap-1">
                         {msg.referenced_pages.map((p) => (
                           <span
                             key={p.id}
-                            className="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full"
+                            className="text-xs bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-full"
                           >
                             {p.title}
                           </span>
@@ -313,34 +312,34 @@ export default function QueryPage() {
                   {msg.judge_save !== undefined && (
                     <div
                       className={`mt-2 flex items-start gap-1 text-xs ${
-                        msg.judge_save ? 'text-green-600' : 'text-gray-400'
+                        msg.judge_save ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-zinc-500'
                       }`}
                     >
                       {msg.judge_save ? <BookmarkPlus size={12} className="mt-0.5 shrink-0" /> : <BookmarkX size={12} className="mt-0.5 shrink-0" />}
                       <span>
                         {msg.judge_save ? '判斷：值得整合' : '未整合'}
-                        {msg.judge_reason && <span className="text-gray-400"> — {msg.judge_reason}</span>}
+                        {msg.judge_reason && <span className="text-gray-400 dark:text-zinc-500"> — {msg.judge_reason}</span>}
                       </span>
                     </div>
                   )}
 
                   {msg.refine_edits && msg.refine_edits.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-gray-100">
-                      <p className="text-xs text-gray-500 mb-1">策展結果：</p>
+                    <div className="mt-2 pt-2 border-t border-gray-100 dark:border-zinc-800">
+                      <p className="text-xs text-gray-500 dark:text-zinc-400 mb-1">策展結果：</p>
                       <ul className="space-y-1">
                         {msg.refine_edits.map((e, i) => (
                           <li key={i} className="text-xs flex items-start gap-1.5">
                             <span
                               className={`px-1.5 py-0.5 rounded font-mono shrink-0 ${
                                 e.action === 'update'
-                                  ? 'bg-blue-50 text-blue-600'
-                                  : 'bg-green-50 text-green-600'
+                                  ? 'bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400'
+                                  : 'bg-green-50 dark:bg-green-950 text-green-600 dark:text-green-400'
                               }`}
                             >
                               {e.action}
                             </span>
-                            <span className="text-gray-700 font-medium">{e.title}</span>
-                            <span className="text-gray-400 truncate">— {e.reason}</span>
+                            <span className="text-gray-700 dark:text-zinc-200 font-medium">{e.title}</span>
+                            <span className="text-gray-400 dark:text-zinc-500 truncate">— {e.reason}</span>
                           </li>
                         ))}
                       </ul>
@@ -348,7 +347,7 @@ export default function QueryPage() {
                   )}
 
                   {msg.judge_save && msg.refine_edits && msg.refine_edits.length === 0 && msg.refine_summary && (
-                    <div className="mt-1 text-xs text-gray-400">{msg.refine_summary}</div>
+                    <div className="mt-1 text-xs text-gray-400 dark:text-zinc-500">{msg.refine_summary}</div>
                   )}
                   </div>
 
@@ -358,7 +357,7 @@ export default function QueryPage() {
                       disabled={capturing === i}
                       title="截圖存檔"
                       data-capture-hide="true"
-                      className="absolute top-2 right-2 p-1.5 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-blue-600 hover:border-blue-300 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100"
+                      className="absolute top-2 right-2 p-1.5 rounded-lg bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 text-gray-400 dark:text-zinc-500 hover:text-blue-600 hover:border-blue-300 opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100"
                     >
                       {capturing === i ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
                     </button>
@@ -371,20 +370,20 @@ export default function QueryPage() {
         </div>
 
         {error && (
-          <p className="text-center text-sm text-red-600">{error}</p>
+          <p className="text-center text-sm text-red-600 dark:text-red-400">{error}</p>
         )}
 
         <div ref={bottomRef} />
       </div>
 
-      <div className="p-4 border-t border-gray-200 bg-white">
+      <div className="p-4 border-t border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-900">
         <div className="flex gap-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
             placeholder="問一個問題..."
-            className="flex-1 border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+            className="flex-1 border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-100 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-700 placeholder:text-gray-400 dark:placeholder:text-zinc-500"
             disabled={loading}
           />
           <button

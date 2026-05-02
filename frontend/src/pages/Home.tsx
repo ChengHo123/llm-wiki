@@ -13,7 +13,7 @@ const STATUS_ICON: Record<string, JSX.Element> = {
   error: <XCircle size={14} className="text-red-500" />,
   processing: <RefreshCw size={14} className="text-blue-500 animate-spin" />,
   queued: <Clock size={14} className="text-yellow-400" />,
-  pending: <Clock size={14} className="text-gray-400" />,
+  pending: <Clock size={14} className="text-gray-400 dark:text-zinc-500" />,
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -51,7 +51,6 @@ export default function HomePage() {
 
   useEffect(() => { loadDocs() }, [loadDocs])
 
-  // 輪詢進行中的文件
   useEffect(() => {
     const hasPending = docs.some((d) => d.status === 'processing' || d.status === 'pending' || d.status === 'queued')
     if (!hasPending) return
@@ -136,25 +135,25 @@ export default function HomePage() {
 
   return (
     <div className="p-8 max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">設定 & 上傳文件</h1>
+      <h1 className="text-2xl font-bold text-gray-800 dark:text-zinc-100 mb-6">設定 & 上傳文件</h1>
 
       {/* API Key 區塊 */}
-      <section className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
+      <section className="bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-700 p-5 mb-6">
         <div className="flex items-center gap-2 mb-4">
           <Key size={16} className="text-blue-600" />
-          <h2 className="font-semibold text-gray-700">API Key</h2>
+          <h2 className="font-semibold text-gray-700 dark:text-zinc-200">API Key</h2>
         </div>
 
         {newKey && (
-          <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-3 mb-3">
-            <p className="text-xs text-yellow-700 mb-1 font-semibold">新 Key 已建立，請複製並儲存（之後不會再顯示）</p>
-            <p className="font-mono text-sm break-all text-yellow-900">{newKey}</p>
+          <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-300 dark:border-yellow-700 rounded-lg p-3 mb-3">
+            <p className="text-xs text-yellow-700 dark:text-yellow-400 mb-1 font-semibold">新 Key 已建立，請複製並儲存（之後不會再顯示）</p>
+            <p className="font-mono text-sm break-all text-yellow-900 dark:text-yellow-300">{newKey}</p>
           </div>
         )}
 
         {keyList.length > 0 && (
           <div className="mb-4">
-            <p className="text-xs text-gray-500 mb-2">已儲存的 Keys（點擊切換）：</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-400 mb-2">已儲存的 Keys（點擊切換）：</p>
             <ul className="space-y-1">
               {keyList.map((k) => {
                 const isActive = k.name === activeName
@@ -163,21 +162,21 @@ export default function HomePage() {
                     key={k.name}
                     className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm border ${
                       isActive
-                        ? 'bg-green-50 border-green-300'
-                        : 'bg-gray-50 border-gray-200 hover:bg-gray-100 cursor-pointer'
+                        ? 'bg-green-50 dark:bg-green-950 border-green-300 dark:border-green-700'
+                        : 'bg-gray-50 dark:bg-zinc-800 border-gray-200 dark:border-zinc-700 hover:bg-gray-100 dark:hover:bg-zinc-700 cursor-pointer'
                     }`}
                     onClick={() => !isActive && handleSelectKey(k.name)}
                   >
                     {isActive ? (
                       <Check size={14} className="text-green-500 shrink-0" />
                     ) : (
-                      <span className="w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0" />
+                      <span className="w-3.5 h-3.5 rounded-full border border-gray-300 dark:border-zinc-600 shrink-0" />
                     )}
-                    <span className="font-medium text-gray-700 shrink-0">{k.name}</span>
-                    <span className="text-xs text-gray-400 font-mono truncate flex-1">{k.key}</span>
+                    <span className="font-medium text-gray-700 dark:text-zinc-200 shrink-0">{k.name}</span>
+                    <span className="text-xs text-gray-400 dark:text-zinc-500 font-mono truncate flex-1">{k.key}</span>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleRemoveKey(k.name) }}
-                      className="text-gray-300 hover:text-red-500 shrink-0"
+                      className="text-gray-300 dark:text-zinc-600 hover:text-red-500 shrink-0"
                       title="從瀏覽器移除"
                     >
                       <Trash2 size={13} />
@@ -191,13 +190,13 @@ export default function HomePage() {
 
         <div className="space-y-3">
           <div>
-            <p className="text-xs text-gray-500 mb-1">建立新 Key：</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-400 mb-1">建立新 Key：</p>
             <div className="flex gap-2">
               <input
                 value={keyName}
                 onChange={(e) => setKeyName(e.target.value)}
                 placeholder="Key 名稱（例如：我的電腦）"
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                className="flex-1 border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-100 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-700 placeholder:text-gray-400 dark:placeholder:text-zinc-500"
                 onKeyDown={(e) => e.key === 'Enter' && handleCreateKey()}
               />
               <button
@@ -210,21 +209,21 @@ export default function HomePage() {
           </div>
 
           <div>
-            <p className="text-xs text-gray-500 mb-1">使用已有 Key 登入：</p>
+            <p className="text-xs text-gray-500 dark:text-zinc-400 mb-1">使用已有 Key 登入：</p>
             <div className="flex gap-2">
               <input
                 value={loginKey}
                 onChange={(e) => setLoginKey(e.target.value)}
                 placeholder="wk_..."
                 type="password"
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
+                className="flex-1 border border-gray-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-gray-800 dark:text-zinc-100 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300 dark:focus:ring-blue-700 placeholder:text-gray-400 dark:placeholder:text-zinc-500"
                 onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
                 disabled={loggingIn}
               />
               <button
                 onClick={handleLogin}
                 disabled={loggingIn || !loginKey.trim()}
-                className="bg-gray-700 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-800 disabled:opacity-40"
+                className="bg-gray-700 dark:bg-zinc-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-800 dark:hover:bg-zinc-500 disabled:opacity-40"
               >
                 {loggingIn ? '驗證中...' : '登入'}
               </button>
@@ -234,7 +233,7 @@ export default function HomePage() {
           {apiKey && (
             <button
               onClick={() => { clearStoredApiKey(); refreshKeyState(); setDocs([]) }}
-              className="text-xs text-gray-400 hover:text-red-500"
+              className="text-xs text-gray-400 dark:text-zinc-500 hover:text-red-500"
             >
               取消目前選擇（不刪除儲存的 keys）
             </button>
@@ -249,19 +248,21 @@ export default function HomePage() {
             <div
               {...getRootProps()}
               className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
-                isDragActive ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-blue-300 hover:bg-gray-50'
+                isDragActive
+                  ? 'border-blue-400 bg-blue-50 dark:bg-blue-950'
+                  : 'border-gray-300 dark:border-zinc-600 hover:border-blue-300 dark:hover:border-blue-600 hover:bg-gray-50 dark:hover:bg-zinc-800'
               }`}
             >
               <input {...getInputProps()} />
-              <Upload size={28} className="mx-auto mb-3 text-gray-400" />
+              <Upload size={28} className="mx-auto mb-3 text-gray-400 dark:text-zinc-500" />
               {uploading ? (
-                <p className="text-blue-600 font-medium">上傳中...</p>
+                <p className="text-blue-600 dark:text-blue-400 font-medium">上傳中...</p>
               ) : isDragActive ? (
-                <p className="text-blue-600 font-medium">放開以上傳</p>
+                <p className="text-blue-600 dark:text-blue-400 font-medium">放開以上傳</p>
               ) : (
                 <>
-                  <p className="text-gray-600 font-medium mb-1">拖放文件至此，或點擊選擇</p>
-                  <p className="text-xs text-gray-400">支援 PDF、圖片、TXT、Markdown</p>
+                  <p className="text-gray-600 dark:text-zinc-300 font-medium mb-1">拖放文件至此，或點擊選擇</p>
+                  <p className="text-xs text-gray-400 dark:text-zinc-500">支援 PDF、圖片、TXT、Markdown</p>
                 </>
               )}
             </div>
@@ -269,19 +270,19 @@ export default function HomePage() {
 
           {/* 文件列表 */}
           {docs.length > 0 && (
-            <section className="bg-white rounded-xl border border-gray-200 p-5">
+            <section className="bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-700 p-5">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="font-semibold text-gray-700">已上傳文件</h2>
-                <button onClick={loadDocs} className="text-gray-400 hover:text-gray-600">
+                <h2 className="font-semibold text-gray-700 dark:text-zinc-200">已上傳文件</h2>
+                <button onClick={loadDocs} className="text-gray-400 dark:text-zinc-500 hover:text-gray-600 dark:hover:text-zinc-300">
                   <RefreshCw size={14} />
                 </button>
               </div>
               <ul className="space-y-2">
                 {docs.map((doc) => (
-                  <li key={doc.id} className="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
-                    <FileText size={14} className="text-gray-400 flex-shrink-0" />
-                    <span className="flex-1 text-sm text-gray-700 truncate">{doc.filename}</span>
-                    <div className="flex items-center gap-1 text-xs text-gray-500">
+                  <li key={doc.id} className="flex items-center gap-3 py-2 border-b border-gray-100 dark:border-zinc-800 last:border-0">
+                    <FileText size={14} className="text-gray-400 dark:text-zinc-500 flex-shrink-0" />
+                    <span className="flex-1 text-sm text-gray-700 dark:text-zinc-200 truncate">{doc.filename}</span>
+                    <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-zinc-400">
                       {STATUS_ICON[doc.status] ?? <Clock size={14} />}
                       <span>{STATUS_LABEL[doc.status] ?? doc.status}</span>
                     </div>
@@ -293,7 +294,7 @@ export default function HomePage() {
                             await loadDocs()
                           } catch { setError('重試失敗') }
                         }}
-                        className="text-gray-300 hover:text-blue-500 transition-colors flex-shrink-0"
+                        className="text-gray-300 dark:text-zinc-600 hover:text-blue-500 transition-colors flex-shrink-0"
                         title="重新處理"
                       >
                         <RotateCcw size={13} />
@@ -307,7 +308,7 @@ export default function HomePage() {
                           await loadDocs()
                         } catch { setError('刪除失敗') }
                       }}
-                      className="text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
+                      className="text-gray-300 dark:text-zinc-600 hover:text-red-500 transition-colors flex-shrink-0"
                       title="刪除文件與對應 wiki 頁面"
                     >
                       <Trash2 size={13} />
@@ -321,7 +322,7 @@ export default function HomePage() {
       )}
 
       {error && (
-        <p className="mt-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
+        <p className="mt-4 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950 rounded-lg px-3 py-2">{error}</p>
       )}
     </div>
   )
