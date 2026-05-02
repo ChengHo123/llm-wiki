@@ -271,6 +271,7 @@ export interface AdminRange {
   start: string  // YYYY-MM-DD
   end: string
   days: number
+  granularity?: string  // "day" | "hour"
 }
 
 export interface AdminLeaderEntry {
@@ -376,6 +377,18 @@ export async function adminRetryDocument(documentId: string): Promise<void> {
 
 export async function adminStopDocument(documentId: string): Promise<void> {
   await adminApi.post(`/admin/documents/${documentId}/stop`)
+}
+
+export interface LogEntry {
+  time: string
+  level: string
+  logger: string
+  message: string
+}
+
+export async function adminLogs(n: number = 200): Promise<LogEntry[]> {
+  const res = await adminApi.get('/admin/logs', { params: { n } })
+  return res.data
 }
 
 export async function* queryWikiStream(

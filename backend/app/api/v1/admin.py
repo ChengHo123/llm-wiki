@@ -145,6 +145,7 @@ class RangeOut(BaseModel):
     start: str  # YYYY-MM-DD
     end: str
     days: int
+    granularity: str = "day"  # "day" | "hour"
 
 
 class OverviewOut(BaseModel):
@@ -308,13 +309,25 @@ async def overview(
         .limit(10)
     )).all()
 
-    # ── Trends（依範圍每日 bucket）─────────────────────────
-    doc_day = func.date(Document.created_at)
-    log_day = func.date(ActivityLog.created_at)
+    # ── Trends（依範圍 daily / hourly bucket）──────────────
+    granularity = "hour" if range_days <= 2 else "day"
+
+    if granularity == "hour":
+        doc_bucket_expr = func.date_trunc("hour", Document.created_at)
+        log_bucket_expr = func.date_trunc("hour", ActivityLog.created_at)
+
+        def _fmt(val) -> str:
+            return val.strftime("%Y-%m-%dT%H") if hasattr(val, "strftime") else str(val)[:13]
+    else:
+        doc_bucket_expr = func.date(Document.created_at)
+        log_bucket_expr = func.date(ActivityLog.created_at)
+
+        def _fmt(val) -> str:  # type: ignore[misc]
+            return val.isoformat() if hasattr(val, "isoformat") else str(val)
 
     ingest_rows = (await db.execute(
         select(
-            doc_day.label("d"),
+            doc_bucket_expr.label("d"),
             Document.status,
             func.count(Document.id),
         )
@@ -322,52 +335,59 @@ async def overview(
             Document.created_at >= range_start,
             Document.created_at <= range_end,
         )
-        .group_by(doc_day, Document.status)
+        .group_by(doc_bucket_expr, Document.status)
     )).all()
 
     query_rows = (await db.execute(
-        select(log_day.label("d"), func.count(ActivityLog.id))
+        select(log_bucket_expr.label("d"), func.count(ActivityLog.id))
         .where(
             ActivityLog.created_at >= range_start,
             ActivityLog.created_at <= range_end,
             ActivityLog.action.in_(["query", "chat"]),
         )
-        .group_by(log_day)
+        .group_by(log_bucket_expr)
     )).all()
 
-    # 把 row 攤成 dict 方便 lookup
-    ingest_by_day: dict[str, dict[str, int]] = {}
+    ingest_by_bucket: dict[str, dict[str, int]] = {}
     for d, status, count in ingest_rows:
-        key = d.isoformat() if hasattr(d, "isoformat") else str(d)
-        ingest_by_day.setdefault(key, {})[status] = int(count)
+        ingest_by_bucket.setdefault(_fmt(d), {})[status] = int(count)
 
-    query_by_day: dict[str, int] = {
-        (d.isoformat() if hasattr(d, "isoformat") else str(d)): int(c)
-        for d, c in query_rows
-    }
+    query_by_bucket: dict[str, int] = {_fmt(d): int(c) for d, c in query_rows}
 
     trends: list[TrendPoint] = []
-    for i in range(range_days):
-        day = range_start + timedelta(days=i)
-        key = day.date().isoformat()
-        bucket = ingest_by_day.get(key, {})
-        done = bucket.get("done", 0)
-        error = bucket.get("error", 0)
-        # queued/processing 也算 total，但不算 done/error
-        total = sum(bucket.values())
-        trends.append(TrendPoint(
-            date=key,
-            ingest_done=done,
-            ingest_error=error,
-            ingest_total=total,
-            query_count=query_by_day.get(key, 0),
-        ))
+    if granularity == "hour":
+        for i in range(range_days * 24):
+            bucket_dt = range_start + timedelta(hours=i)
+            if bucket_dt > range_end:
+                break
+            key = bucket_dt.strftime("%Y-%m-%dT%H")
+            bucket = ingest_by_bucket.get(key, {})
+            trends.append(TrendPoint(
+                date=key,
+                ingest_done=bucket.get("done", 0),
+                ingest_error=bucket.get("error", 0),
+                ingest_total=sum(bucket.values()),
+                query_count=query_by_bucket.get(key, 0),
+            ))
+    else:
+        for i in range(range_days):
+            day = range_start + timedelta(days=i)
+            key = day.date().isoformat()
+            bucket = ingest_by_bucket.get(key, {})
+            trends.append(TrendPoint(
+                date=key,
+                ingest_done=bucket.get("done", 0),
+                ingest_error=bucket.get("error", 0),
+                ingest_total=sum(bucket.values()),
+                query_count=query_by_bucket.get(key, 0),
+            ))
 
     return OverviewOut(
         range=RangeOut(
             start=range_start.date().isoformat(),
             end=range_end.date().isoformat(),
             days=range_days,
+            granularity=granularity,
         ),
         kpi=kpi,
         top_uploaders=build_leader(top_uploaders_rows),
@@ -786,3 +806,22 @@ async def spend(
         fetched_count=len(logs),
         note=note,
     )
+
+
+# ── Logs（後端 log buffer）──────────────────────────────
+
+
+class LogEntry(BaseModel):
+    time: str
+    level: str
+    logger: str
+    message: str
+
+
+@router.get("/admin/logs", response_model=list[LogEntry])
+async def admin_logs(
+    n: int = Query(200, ge=1, le=500),
+    _: None = Depends(require_admin),
+):
+    from app.core.log_buffer import get_recent_logs
+    return get_recent_logs(n)

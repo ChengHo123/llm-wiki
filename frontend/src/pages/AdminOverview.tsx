@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   BarChart3, Users, FileText, BookOpen, MessageCircle,
   Activity, RefreshCw, LogOut, ListOrdered, AlertTriangle,
-  TrendingUp, TrendingDown, Minus, Coins, Cpu, CalendarRange, BrainCircuit,
+  TrendingUp, TrendingDown, Minus, Coins, Cpu, CalendarRange, BrainCircuit, ScrollText,
 } from 'lucide-react'
 import {
   adminOverview, adminSpend, adminLogout,
@@ -40,8 +40,8 @@ export default function AdminOverviewPage() {
   const [error, setError] = useState('')
   const [tab, setTab] = useState<LeaderTab>('uploaders')
 
-  const [preset, setPreset] = useState<Preset>(14)
-  const [{ start, end }, setDates] = useState<{ start: string; end: string }>(presetRange(14))
+  const [preset, setPreset] = useState<Preset>(7)
+  const [{ start, end }, setDates] = useState<{ start: string; end: string }>(presetRange(7))
 
   const applyPreset = (p: Preset) => {
     setPreset(p)
@@ -139,6 +139,16 @@ export default function AdminOverviewPage() {
             >
               <Users size={14} />
               使用者列表
+            </Link>
+            <Link
+              to="/admin/logs"
+              className="text-sm text-zinc-600 dark:text-zinc-300
+                         hover:text-blue-600 dark:hover:text-blue-400
+                         flex items-center gap-1 px-2.5 py-1.5 rounded-lg
+                         hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            >
+              <ScrollText size={14} />
+              Logs
             </Link>
             <a
               href={`${window.location.protocol}//${window.location.hostname}:4000/ui`}
@@ -269,7 +279,7 @@ export default function AdminOverviewPage() {
           <Card>
             <CardHeader
               icon={<FileText size={14} className="text-purple-500" />}
-              title={`文件處理量（${data.range.days} 天）`}
+              title={`文件處理量（${data.range.granularity === 'hour' ? '逐小時' : `${data.range.days} 天`}）`}
               right={
                 <Legend items={[
                   { label: '完成', color: '#10b981' },
@@ -277,20 +287,20 @@ export default function AdminOverviewPage() {
                 ]} />
               }
             />
-            <IngestBarChart trends={data.trends} />
+            <IngestBarChart trends={data.trends} granularity={data.range.granularity ?? 'day'} />
           </Card>
 
           <Card>
             <CardHeader
               icon={<MessageCircle size={14} className="text-blue-500" />}
-              title={`查詢次數（${data.range.days} 天）`}
+              title={`查詢次數（${data.range.granularity === 'hour' ? '逐小時' : `${data.range.days} 天`}）`}
               right={
                 <span className="text-xs text-zinc-400 dark:text-zinc-500">
                   共 {data.trends.reduce((s, p) => s + p.query_count, 0)} 次
                 </span>
               }
             />
-            <QueryLineChart trends={data.trends} />
+            <QueryLineChart trends={data.trends} granularity={data.range.granularity ?? 'day'} />
           </Card>
         </section>
 
@@ -446,8 +456,12 @@ export default function AdminOverviewPage() {
         <p className="mt-4 text-xs text-zinc-400 dark:text-zinc-500">
           資料時區為 UTC，時間範圍依 ingest / 查詢的建立時間過濾。
           如需更細的逐筆 spend，可到{' '}
-          <a href="http://localhost:4000" target="_blank"
-             className="underline hover:text-zinc-600 dark:hover:text-zinc-300">LiteLLM UI</a>。
+          <a
+            href={`${window.location.protocol}//${window.location.hostname}:4000/ui`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-zinc-600 dark:hover:text-zinc-300"
+          >LiteLLM UI</a>。
         </p>
       </div>
     </div>
@@ -715,13 +729,18 @@ function Legend({ items }: { items: { label: string; color: string }[] }) {
 }
 
 function shortDate(iso: string) {
+  if (iso.includes('T')) {
+    const [datePart, hour] = iso.split('T')
+    const [, m, d] = datePart.split('-')
+    return `${parseInt(m)}/${parseInt(d)} ${hour}h`
+  }
   const [, m, d] = iso.split('-')
   return `${parseInt(m)}/${parseInt(d)}`
 }
 
 const CHART_LABEL = '#a1a1aa'  // zinc-400 — 在淺/深模式對比都夠
 
-function IngestBarChart({ trends }: { trends: AdminTrendPoint[] }) {
+function IngestBarChart({ trends, granularity = 'day' }: { trends: AdminTrendPoint[]; granularity?: string }) {
   const W = 480, H = 160, padL = 28, padR = 8, padT = 8, padB = 22
   const innerW = W - padL - padR
   const innerH = H - padT - padB
@@ -731,6 +750,7 @@ function IngestBarChart({ trends }: { trends: AdminTrendPoint[] }) {
   const ticks = max <= 4
     ? Array.from({ length: max + 1 }, (_, i) => i)
     : [0, Math.ceil(max / 2), max]
+  const labelStep = granularity === 'hour' ? 6 : 2
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full text-zinc-200 dark:text-zinc-800"
@@ -775,7 +795,7 @@ function IngestBarChart({ trends }: { trends: AdminTrendPoint[] }) {
       })}
 
       {trends.map((t, i) =>
-        i % 2 === 1 ? (
+        i % labelStep === 0 ? (
           <text
             key={t.date}
             x={padL + i * barW + barW / 2}
@@ -790,7 +810,7 @@ function IngestBarChart({ trends }: { trends: AdminTrendPoint[] }) {
   )
 }
 
-function QueryLineChart({ trends }: { trends: AdminTrendPoint[] }) {
+function QueryLineChart({ trends, granularity = 'day' }: { trends: AdminTrendPoint[]; granularity?: string }) {
   const W = 480, H = 160, padL = 28, padR = 8, padT = 8, padB = 22
   const innerW = W - padL - padR
   const innerH = H - padT - padB
@@ -842,7 +862,7 @@ function QueryLineChart({ trends }: { trends: AdminTrendPoint[] }) {
       ))}
 
       {trends.map((t, i) =>
-        i % 2 === 1 ? (
+        i % (granularity === 'hour' ? 6 : 2) === 0 ? (
           <text
             key={t.date}
             x={padL + i * stepX}

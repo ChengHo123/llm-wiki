@@ -3,6 +3,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
+from app.core.log_buffer import setup_log_buffer
+
+setup_log_buffer()
 from app.api.v1 import admin, auth, documents, wiki, query, linebot
 from app.api.v1.linebot import warmup_line_client, close_line_client
 from app.services.ingest_queue import start_worker, stop_worker

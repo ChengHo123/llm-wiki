@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from app.db.session import AsyncSessionLocal
 from app.models.document import Document
@@ -364,6 +364,8 @@ async def run_ingest(document_id: uuid.UUID) -> None:
         ).scalar_one_or_none()
         current_end_user.set(line_tag(binding.line_user_id) if binding else web_tag(doc.api_key_id))
 
+        # 清除本文件上次產生的 wiki pages，確保重跑時不留殘留頁
+        await db.execute(delete(WikiPage).where(WikiPage.source_document_id == doc.id))
         await db.commit()
 
         try:
