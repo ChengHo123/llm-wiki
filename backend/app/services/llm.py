@@ -17,9 +17,15 @@ logger = logging.getLogger(__name__)
 
 
 def _user_kwargs() -> dict:
-    """讀 contextvar，若有值就回傳 {'user': '...'} 供 OpenAI client / LangChain bind。"""
+    """讀 contextvar，回傳 {'user': '...'} 供直接 OpenAI client 呼叫（call_llm / stream_llm）。"""
     user = current_end_user.get()
     return {"user": user} if user else {}
+
+
+def _langchain_user_kwargs() -> dict:
+    """LangChain ChatOpenAI 需透過 model_kwargs 才能把 user 帶進底層 API 呼叫。"""
+    user = current_end_user.get()
+    return {"model_kwargs": {"user": user}} if user else {}
 
 settings = get_settings()
 client = AsyncOpenAI(
@@ -98,7 +104,7 @@ async def structured_call(
     策略：先試 function_calling（tool call），失敗則退回手動 JSON 解析。
     對 Ollama / thinking model 也能穩定工作。
     """
-    chat = _chat.bind(max_tokens=max_tokens, **_user_kwargs())
+    chat = _chat.bind(max_tokens=max_tokens, **_langchain_user_kwargs())
 
     # Pass 1: tool calling with include_raw to inspect failures
     try:
@@ -242,7 +248,7 @@ async def vision_structured_call(
     Pass 1: LangChain function_calling（tool）—— 多數 vision model 支援不穩，會 fallback
     Pass 2: 嚴格 JSON prompt + 手動 parse（保留 multimodal content）
     """
-    chat = _vision_chat.bind(max_tokens=max_tokens, **_user_kwargs())
+    chat = _vision_chat.bind(max_tokens=max_tokens, **_langchain_user_kwargs())
 
     # Pass 1: tool calling
     try:
