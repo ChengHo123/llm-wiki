@@ -44,6 +44,12 @@ if [[ "$NO_PULL" == "false" ]]; then
     docker compose -f docker-compose.prod.yml pull backend frontend
 fi
 docker compose -f docker-compose.prod.yml up -d
+
+# Caddyfile 是 volume mount，container spec 沒變時 `up -d` 不會重啟 caddy。
+# 顯式 reload 讓 Caddyfile 改動每次部署都生效（首次啟動會失敗，忽略）。
+docker compose -f docker-compose.prod.yml exec -T caddy \
+    caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || true
+
 docker image prune -f
 
 echo ">>> Status:"
