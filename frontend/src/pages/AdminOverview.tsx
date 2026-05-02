@@ -151,7 +151,7 @@ export default function AdminOverviewPage() {
               Logs
             </Link>
             <a
-              href={`${window.location.protocol}//${window.location.hostname}:4000/ui`}
+              href={`http://${window.location.hostname}:4000/ui`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm text-zinc-600 dark:text-zinc-300
@@ -457,7 +457,7 @@ export default function AdminOverviewPage() {
           資料時區為 UTC，時間範圍依 ingest / 查詢的建立時間過濾。
           如需更細的逐筆 spend，可到{' '}
           <a
-            href={`${window.location.protocol}//${window.location.hostname}:4000/ui`}
+            href={`http://${window.location.hostname}:4000/ui`}
             target="_blank"
             rel="noopener noreferrer"
             className="underline hover:text-zinc-600 dark:hover:text-zinc-300"
