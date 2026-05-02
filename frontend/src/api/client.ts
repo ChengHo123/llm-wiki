@@ -375,10 +375,6 @@ export async function adminRetryDocument(documentId: string): Promise<void> {
   await adminApi.post(`/admin/documents/${documentId}/retry`)
 }
 
-export async function adminStopDocument(documentId: string): Promise<void> {
-  await adminApi.post(`/admin/documents/${documentId}/stop`)
-}
-
 export interface LogEntry {
   time: string
   level: string

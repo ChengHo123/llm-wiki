@@ -1,5 +1,6 @@
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -348,8 +349,6 @@ async def run_ingest(document_id: uuid.UUID) -> None:
       3. 每 chunk 帶 outline + existing_wiki ingest，逐塊 commit
     短文件走原本單次 path。
     """
-    from app.services.ingest_queue import is_cancelled
-
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Document).where(Document.id == document_id))
         doc = result.scalar_one_or_none()
@@ -364,8 +363,8 @@ async def run_ingest(document_id: uuid.UUID) -> None:
         ).scalar_one_or_none()
         current_end_user.set(line_tag(binding.line_user_id) if binding else web_tag(doc.api_key_id))
 
-        # 清除本文件上次產生的 wiki pages，確保重跑時不留殘留頁
-        await db.execute(delete(WikiPage).where(WikiPage.source_document_id == doc.id))
+        # 記錄起跑時刻；成功完成後才清除這份文件上次留下、本次沒被 upsert 到的舊 wiki pages
+        ingest_start = datetime.utcnow()
         await db.commit()
 
         try:
@@ -395,11 +394,6 @@ async def run_ingest(document_id: uuid.UUID) -> None:
                 chunked_system = f"{INGEST_SYSTEM_PROMPT}\n\n{CHUNK_INSTRUCTION}"
 
                 for idx, chunk in enumerate(chunks):
-                    if is_cancelled(doc.id):
-                        doc.status = "error"
-                        doc.error_message = f"已停止（完成 {idx}/{len(chunks)} 段）"
-                        await db.commit()
-                        return
                     existing_result = await db.execute(
                         select(WikiPage).where(WikiPage.api_key_id == doc.api_key_id)
                     )
@@ -460,6 +454,14 @@ async def run_ingest(document_id: uuid.UUID) -> None:
                 all_pages_created = await _apply_ingest_result(
                     db, doc.id, doc.api_key_id, data,
                 )
+
+            # 成功完成：刪除上次留下、本次沒被 upsert 到的 stale 頁面
+            await db.execute(
+                delete(WikiPage).where(
+                    WikiPage.source_document_id == doc.id,
+                    WikiPage.updated_at < ingest_start,
+                )
+            )
 
             doc.status = "done"
             db.add(ActivityLog(

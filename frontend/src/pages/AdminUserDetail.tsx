@@ -2,10 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft, FileText, CheckCircle, XCircle, Clock, RefreshCw,
-  RotateCcw, StopCircle,
+  RotateCcw,
 } from 'lucide-react'
 import {
-  adminUserDetail, adminRetryDocument, adminStopDocument,
+  adminUserDetail, adminRetryDocument,
   type AdminUserDetail,
 } from '../api/client'
 import ThemeToggle from '../components/ThemeToggle'
@@ -60,19 +60,6 @@ export default function AdminUserDetailPage() {
       await load()
     } catch (e: any) {
       setError(e.response?.data?.detail || '重試失敗')
-    } finally {
-      setBusy('')
-    }
-  }
-
-  const handleStop = async (docId: string) => {
-    if (!confirm('停止這份文件的處理？已產生的 wiki 頁不會刪除。')) return
-    setBusy(docId)
-    try {
-      await adminStopDocument(docId)
-      await load()
-    } catch (e: any) {
-      setError(e.response?.data?.detail || '停止失敗')
     } finally {
       setBusy('')
     }
@@ -166,19 +153,6 @@ export default function AdminUserDetailPage() {
                     {STATUS_ICON[doc.status] ?? <Clock size={14} />}
                     <span>{STATUS_LABEL[doc.status] ?? doc.status}</span>
                   </div>
-                  {(doc.status === 'queued' || doc.status === 'processing') && (
-                    <button
-                      onClick={() => handleStop(doc.id)}
-                      disabled={busy === doc.id}
-                      className="w-7 h-7 inline-flex items-center justify-center rounded
-                                 text-zinc-300 dark:text-zinc-600
-                                 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30
-                                 disabled:opacity-30 transition-colors"
-                      title="停止處理"
-                    >
-                      <StopCircle size={14} />
-                    </button>
-                  )}
                   {(doc.status === 'error' || doc.status === 'done') && (
                     <button
                       onClick={() => handleRetry(doc.id)}

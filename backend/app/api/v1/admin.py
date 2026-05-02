@@ -25,7 +25,7 @@ from app.models.api_key import ApiKey
 from app.models.document import Document
 from app.models.line_user_binding import LineUserBinding
 from app.models.wiki_page import WikiPage
-from app.services.ingest_queue import enqueue, request_cancel
+from app.services.ingest_queue import enqueue
 
 router = APIRouter()
 
@@ -551,7 +551,7 @@ async def user_detail(
     )
 
 
-# ── Document control（admin 跨 user 重試 / 停止）─────────
+# ── Document control（admin 跨 user 重試）─────────────
 
 
 @router.post("/admin/documents/{document_id}/retry")
@@ -566,36 +566,11 @@ async def admin_retry(
     if not doc:
         raise HTTPException(status_code=404, detail="文件不存在")
     if doc.status == "processing":
-        raise HTTPException(status_code=409, detail="文件處理中，請先停止")
+        raise HTTPException(status_code=409, detail="文件處理中，請等待完成")
     doc.status = "queued"
     doc.error_message = None
     await db.commit()
     await enqueue(doc.id)
-    return {"ok": True}
-
-
-@router.post("/admin/documents/{document_id}/stop")
-async def admin_stop(
-    document_id: uuid.UUID,
-    _: None = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    doc = (
-        await db.execute(select(Document).where(Document.id == document_id))
-    ).scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="文件不存在")
-    if doc.status not in ("queued", "processing"):
-        raise HTTPException(status_code=409, detail="文件不在進行中")
-
-    # processing 中：標記 cancellation，run_ingest 會在下個 chunk 邊界 bail
-    # queued 但還沒被 worker 拿走：worker 拿走時看到 cancellation 旗標就 skip
-    request_cancel(doc.id)
-    if doc.status == "queued":
-        # 馬上把狀態落地，不用等 worker 處理
-        doc.status = "error"
-        doc.error_message = "Admin 手動停止（排隊中）"
-        await db.commit()
     return {"ok": True}
 
 
