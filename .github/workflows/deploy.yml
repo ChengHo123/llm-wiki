@@ -1,10 +1,9 @@
 name: Build & Deploy
 
 # Triggers:
-#   - Pushing a tag matching v* (e.g. v1.0.0)  → build arm64 images, push to GHCR, deploy to Oracle VM
-#   - Manual dispatch from Actions UI          → same flow, with optional tag input
-#
-# All other pushes (master, branches, PRs) do nothing — keeps CI quiet and free.
+#   - Pushing a tag matching v* (e.g. v1.0.0)  → build on Oracle VM (native arm64), deploy
+#   - Manual dispatch with tag                  → redeploy existing tag (pull from GHCR, no rebuild)
+#   - Manual dispatch without tag               → rebuild & deploy current commit
 
 on:
   push:
@@ -13,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing image tag to deploy (e.g. v1.0.0). Leave blank to redeploy current.'
+        description: 'Existing image tag to redeploy (e.g. v1.0.0). Leave blank to rebuild & deploy.'
         required: false
         default: ''
 
@@ -21,28 +20,21 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  build:
-    # Skip build when manually dispatched without rebuild — just redeploy existing image
+  # ── Build + Deploy（tag push 或 manual 不帶 tag）──────────────────────────
+  build-and-deploy:
     if: github.event_name == 'push' || github.event.inputs.tag == ''
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, arm64]
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
 
-      # GHCR 強制 image path 全小寫，但 github.repository_owner 保留大小寫，需轉小寫
       - name: Resolve lowercase owner
         id: owner
         run: echo "value=${OWNER,,}" >> "$GITHUB_OUTPUT"
         env:
           OWNER: ${{ github.repository_owner }}
-
-      - uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
         with:
@@ -50,55 +42,68 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build & push backend (arm64)
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend (native arm64, no QEMU)
         uses: docker/build-push-action@v5
         with:
           context: ./backend
-          platforms: linux/arm64
-          push: true
+          load: true
           tags: |
             ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/llm-wiki-backend:${{ github.ref_name }}
             ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/llm-wiki-backend:latest
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,scope=backend,mode=max
+          cache-from: type=local,src=/tmp/buildx-cache/backend
+          cache-to: type=local,dest=/tmp/buildx-cache/backend-new,mode=max
 
-      - name: Build & push frontend (arm64)
+      - name: Build frontend (native arm64, no QEMU)
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
-          platforms: linux/arm64
-          push: true
+          load: true
           tags: |
             ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/llm-wiki-frontend:${{ github.ref_name }}
             ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/llm-wiki-frontend:latest
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,scope=frontend,mode=max
+          cache-from: type=local,src=/tmp/buildx-cache/frontend
+          cache-to: type=local,dest=/tmp/buildx-cache/frontend-new,mode=max
 
-  deploy:
-    needs: [build]
-    # Run deploy even if build was skipped (manual redeploy of existing tag)
-    if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Resolve deploy tag
-        id: tag
+      - name: Rotate build cache
+        if: always()
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.tag }}" ]]; then
-            echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          fi
+          rm -rf /tmp/buildx-cache/backend /tmp/buildx-cache/frontend
+          mv /tmp/buildx-cache/backend-new /tmp/buildx-cache/backend 2>/dev/null || true
+          mv /tmp/buildx-cache/frontend-new /tmp/buildx-cache/frontend 2>/dev/null || true
 
-      - name: Deploy to Oracle VM via SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Push to GHCR
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/llm-wiki-backend:${{ github.ref_name }}
+          docker push ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/llm-wiki-backend:latest
+          docker push ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/llm-wiki-frontend:${{ github.ref_name }}
+          docker push ${{ env.REGISTRY }}/${{ steps.owner.outputs.value }}/llm-wiki-frontend:latest
+
+      - name: Deploy (images already local, skip pull)
+        run: |
+          cd /opt/llm-wiki
+          git fetch --tags --prune
+          git checkout "${{ github.ref_name }}"
+          ./scripts/deploy.sh "${{ github.ref_name }}" --no-pull
+
+  # ── Redeploy（manual dispatch 帶指定 tag，不重 build）──────────────────────
+  redeploy:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''
+    runs-on: [self-hosted, linux, arm64]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@v3
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ secrets.DEPLOY_PORT || 22 }}
-          script: |
-            set -euo pipefail
-            cd /opt/llm-wiki
-            git fetch --tags --prune
-            git checkout "${{ steps.tag.outputs.value }}"
-            ./scripts/deploy.sh "${{ steps.tag.outputs.value }}"
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Redeploy existing tag
+        run: |
+          cd /opt/llm-wiki
+          git fetch --tags --prune
+          git checkout "${{ github.event.inputs.tag }}"
+          ./scripts/deploy.sh "${{ github.event.inputs.tag }}"
