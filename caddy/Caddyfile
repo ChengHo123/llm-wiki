@@ -5,11 +5,8 @@
 {$DOMAIN} {
 	encode gzip
 
-	# LiteLLM admin UI / API — 以後台 cookie 為唯一驗證，不另設 LiteLLM 帳密
+	# LiteLLM admin UI / API — 使用與後台相同的帳密（ADMIN_USERNAME / ADMIN_PASSWORD）登入
 	handle /litellm/* {
-		forward_auth backend:8000 {
-			uri /api/admin/check?next=/litellm/ui
-		}
 		reverse_proxy litellm:4000
 	}
 
