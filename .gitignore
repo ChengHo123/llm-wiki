@@ -28,3 +28,5 @@ frontend/.vite/
 # OS
 .DS_Store
 Thumbs.db
+ssh-key-2026-05-01.key
+ssh-key-2026-05-01.key.pub
