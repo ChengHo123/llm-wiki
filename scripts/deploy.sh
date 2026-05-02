@@ -37,27 +37,8 @@ fi
 
 echo ">>> Deploying tag: ${TAG}"
 
-# 等待 ingest queue 清空，避免重啟中斷進行中的文件處理
-DRAIN_TIMEOUT=1800  # 最多等 30 分鐘
-DRAIN_ELAPSED=0
-echo ">>> Waiting for ingest queue to drain…"
-while true; do
-    QUEUE=$(docker compose -f docker-compose.prod.yml exec -T postgres \
-        psql -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -t -c \
-        "SELECT COUNT(*) FROM documents WHERE status IN ('queued', 'processing');" \
-        2>/dev/null | tr -d ' \n')
-    if [[ "${QUEUE}" == "0" ]]; then
-        echo ">>> Queue empty — proceeding."
-        break
-    fi
-    if [[ ${DRAIN_ELAPSED} -ge ${DRAIN_TIMEOUT} ]]; then
-        echo "WARNING: Queue still has ${QUEUE} item(s) after ${DRAIN_TIMEOUT}s — deploying anyway." >&2
-        break
-    fi
-    echo "    Queue depth: ${QUEUE} — waiting 15s… (${DRAIN_ELAPSED}s elapsed)"
-    sleep 15
-    DRAIN_ELAPSED=$((DRAIN_ELAPSED + 15))
-done
+# 重啟過程中正在處理的文件會在啟動時由 _requeue_pending 自動 requeue，
+# 並由 run_ingest 以「成功才刪 stale 頁」清掉上次跑一半的殘留。不需要等 queue 清空。
 
 if [[ "$NO_PULL" == "false" ]]; then
     docker compose -f docker-compose.prod.yml pull backend frontend
