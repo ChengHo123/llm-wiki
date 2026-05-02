@@ -2,13 +2,13 @@
 	email {$LE_EMAIL}
 }
 
+# LiteLLM admin UI — https://<DOMAIN>:4000/ui
+{$DOMAIN}:4000 {
+	reverse_proxy litellm:4000
+}
+
 {$DOMAIN} {
 	encode gzip
-
-	# LiteLLM admin UI / API — 使用與後台相同的帳密（ADMIN_USERNAME / ADMIN_PASSWORD）登入
-	handle /litellm/* {
-		reverse_proxy litellm:4000
-	}
 
 	# Frontend nginx already proxies /api/* to backend:8000, so we just front everything to it.
 	handle {

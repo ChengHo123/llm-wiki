@@ -141,7 +141,7 @@ export default function AdminOverviewPage() {
               使用者列表
             </Link>
             <a
-              href="/litellm/ui"
+              href={`${window.location.protocol}//${window.location.hostname}:4000/ui`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm text-zinc-600 dark:text-zinc-300
