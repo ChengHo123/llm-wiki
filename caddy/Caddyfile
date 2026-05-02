@@ -2,8 +2,9 @@
 	email {$LE_EMAIL}
 }
 
-# LiteLLM admin UI — https://<DOMAIN>:4000/ui
-{$DOMAIN}:4000 {
+# LiteLLM admin UI — http://<DOMAIN>:4000/ui
+# 純 HTTP：LiteLLM 內部產生的 redirect 用 http scheme，套 TLS 會在 login redirect 時破。
+http://{$DOMAIN}:4000 {
 	reverse_proxy litellm:4000
 }
 
