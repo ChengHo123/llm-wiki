@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   BarChart3, Users, FileText, BookOpen, MessageCircle,
   Activity, RefreshCw, LogOut, ListOrdered, AlertTriangle,
-  TrendingUp, TrendingDown, Minus, Coins, Cpu, CalendarRange,
+  TrendingUp, TrendingDown, Minus, Coins, Cpu, CalendarRange, BrainCircuit,
 } from 'lucide-react'
 import {
   adminOverview, adminSpend, adminLogout,
@@ -140,6 +140,18 @@ export default function AdminOverviewPage() {
               <Users size={14} />
               使用者列表
             </Link>
+            <a
+              href="/litellm/ui"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-zinc-600 dark:text-zinc-300
+                         hover:text-blue-600 dark:hover:text-blue-400
+                         flex items-center gap-1 px-2.5 py-1.5 rounded-lg
+                         hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            >
+              <BrainCircuit size={14} />
+              LiteLLM
+            </a>
             <button
               onClick={() => load(start, end)}
               className="text-zinc-500 dark:text-zinc-400

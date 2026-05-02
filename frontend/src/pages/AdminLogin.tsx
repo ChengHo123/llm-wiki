@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Lock, Sparkles } from 'lucide-react'
 import { adminLogin } from '../api/client'
 import ThemeToggle from '../components/ThemeToggle'
 
 export default function AdminLogin() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -17,7 +18,7 @@ export default function AdminLogin() {
     setError('')
     try {
       await adminLogin(username.trim(), password)
-      navigate('/admin/overview')
+      navigate(searchParams.get('next') || '/admin/overview')
     } catch (e: any) {
       setError(e.response?.data?.detail || '登入失敗')
     } finally {

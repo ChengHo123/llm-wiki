@@ -66,6 +66,21 @@ async def admin_me(_: None = Depends(require_admin)):
     return {"ok": True}
 
 
+from fastapi import Cookie as FastAPICookie
+from fastapi.responses import RedirectResponse
+
+@router.get("/admin/check")
+async def admin_check(
+    next: str = "/litellm/ui",
+    admin_session: str | None = FastAPICookie(default=None, alias=ADMIN_COOKIE_NAME),
+):
+    """Caddy forward_auth 用：有效 cookie → 200；否則 302 到登入頁帶 next 參數。"""
+    if admin_session and verify_admin_token(admin_session):
+        return {"ok": True}
+    safe_next = next if next.startswith("/") else "/admin/overview"
+    return RedirectResponse(url=f"/admin/login?next={safe_next}", status_code=302)
+
+
 # ── Overview（平台總覽）─────────────────────────────────
 
 

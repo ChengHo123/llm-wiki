@@ -22,14 +22,12 @@ services:
 
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--root_path", "/litellm"]
     environment:
       DATABASE_URL: ${LITELLM_DATABASE_URL}
       LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       STORE_MODEL_IN_DB: "True"
-      UI_USERNAME: ${LITELLM_UI_USERNAME}
-      UI_PASSWORD: ${LITELLM_UI_PASSWORD}
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
     depends_on:
@@ -54,6 +52,8 @@ services:
       LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET:-}
       LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN:-}
       FRONTEND_URL: ${FRONTEND_URL:-https://${DOMAIN}}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
     volumes:
       - uploads:/app/uploads
     depends_on:

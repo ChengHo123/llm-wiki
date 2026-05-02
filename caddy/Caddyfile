@@ -4,12 +4,23 @@
 
 {$DOMAIN} {
 	encode gzip
+
+	# LiteLLM admin UI / API — 以後台 cookie 為唯一驗證，不另設 LiteLLM 帳密
+	handle /litellm/* {
+		forward_auth backend:8000 {
+			uri /api/admin/check?next=/litellm/ui
+		}
+		reverse_proxy litellm:4000
+	}
+
 	# Frontend nginx already proxies /api/* to backend:8000, so we just front everything to it.
-	reverse_proxy frontend:80 {
-		# Cover the LLM ingest path which can take 30s+
-		transport http {
-			read_timeout 600s
-			write_timeout 600s
+	handle {
+		reverse_proxy frontend:80 {
+			# Cover the LLM ingest path which can take 30s+
+			transport http {
+				read_timeout 600s
+				write_timeout 600s
+			}
 		}
 	}
 }
