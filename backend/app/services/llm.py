@@ -3,12 +3,10 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import AsyncIterator, Type, TypeVar
+from typing import Any, AsyncIterator, Type, TypeVar
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from app.core.config import get_settings
 from app.core.end_user import current_end_user
@@ -17,15 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 def _user_kwargs() -> dict:
-    """讀 contextvar，回傳 {'user': '...'} 供直接 OpenAI client 呼叫（call_llm / stream_llm）。"""
+    """讀 contextvar，回傳 {'user': '...'}。所有對 LiteLLM 的 OpenAI 呼叫都帶這個，
+    確保後台 /End-Users 能歸戶。"""
     user = current_end_user.get()
     return {"user": user} if user else {}
 
-
-def _langchain_user_kwargs() -> dict:
-    """LangChain ChatOpenAI 需透過 model_kwargs 才能把 user 帶進底層 API 呼叫。"""
-    user = current_end_user.get()
-    return {"model_kwargs": {"user": user}} if user else {}
 
 settings = get_settings()
 client = AsyncOpenAI(
@@ -35,23 +29,38 @@ client = AsyncOpenAI(
     max_retries=0,
 )
 
-_chat = ChatOpenAI(
-    model=settings.LLM_MODEL,
-    base_url=settings.LLM_BASE_URL,
-    api_key=settings.LLM_API_KEY,
-    timeout=360000.0,
-    max_retries=0,
-)
-
-_vision_chat = ChatOpenAI(
-    model=settings.VISION_MODEL,
-    base_url=settings.LLM_BASE_URL,
-    api_key=settings.LLM_API_KEY,
-    timeout=360000.0,
-    max_retries=0,
-)
-
 T = TypeVar("T", bound=BaseModel)
+
+
+def _deref_schema(node: Any, defs: dict | None = None) -> Any:
+    """把 pydantic v2 model_json_schema 裡的 $ref/$defs 全部 inline，
+    產出 OpenAI tool 可直接用的 parameters schema。"""
+    if defs is None and isinstance(node, dict):
+        defs = node.get("$defs", {})
+    if isinstance(node, dict):
+        if "$ref" in node:
+            name = node["$ref"].rsplit("/", 1)[-1]
+            return _deref_schema(defs.get(name, {}), defs)
+        return {k: _deref_schema(v, defs) for k, v in node.items() if k != "$defs"}
+    if isinstance(node, list):
+        return [_deref_schema(item, defs) for item in node]
+    return node
+
+
+def _pydantic_to_tool(schema: Type[BaseModel]) -> dict:
+    """把 pydantic schema 轉為 OpenAI function tool 定義。"""
+    raw = schema.model_json_schema()
+    params = _deref_schema(raw)
+    name = params.pop("title", "") or schema.__name__
+    description = params.pop("description", "") or schema.__name__
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": params,
+        },
+    }
 
 
 def _strip_think(text: str) -> str:
@@ -100,30 +109,42 @@ async def structured_call(
     user: str | list,
     max_tokens: int = 8192,
 ) -> T:
-    """用 LangChain with_structured_output 拿結構化輸出。
-    策略：先試 function_calling（tool call），失敗則退回手動 JSON 解析。
-    對 Ollama / thinking model 也能穩定工作。
+    """直接用 OpenAI client 的 tool calling 拿結構化輸出。
+    Pass 1：function call；Pass 2：JSON prompt + 手動 parse（給不支援 tool 的模型）。
+    所有呼叫都帶 user 標籤，確保 LiteLLM 後台能歸戶。
     """
-    chat = _chat.bind(max_tokens=max_tokens, **_langchain_user_kwargs())
+    user_text = _flatten_content(user) if not isinstance(user, str) else user
+    tool = _pydantic_to_tool(schema)
+    tool_name = tool["function"]["name"]
 
-    # Pass 1: tool calling with include_raw to inspect failures
+    # Pass 1: function calling
     try:
-        structured = chat.with_structured_output(
-            schema, method="function_calling", include_raw=True
+        response = await client.chat.completions.create(
+            model=settings.LLM_MODEL,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_text},
+            ],
+            tools=[tool],
+            tool_choice={"type": "function", "function": {"name": tool_name}},
+            **_user_kwargs(),
         )
-        result = await structured.ainvoke([
-            SystemMessage(content=system),
-            HumanMessage(content=user),
-        ])
-        parsed = result.get("parsed") if isinstance(result, dict) else result
-        if parsed is not None:
-            return parsed
-        raw_msg: AIMessage | None = result.get("raw") if isinstance(result, dict) else None
-        raw_text = raw_msg.content if raw_msg else ""
-        logger.warning("function_calling returned no parsed object; raw preview: %s", str(raw_text)[:300])
+        msg = response.choices[0].message
+        if msg.tool_calls:
+            args_str = msg.tool_calls[0].function.arguments
+            try:
+                data = json.loads(args_str)
+                return schema.model_validate(data)
+            except (json.JSONDecodeError, ValidationError) as e:
+                logger.warning("tool_call parse failed: %s; args preview: %s", e, args_str[:300])
+        else:
+            logger.warning(
+                "function_calling returned no tool call; raw preview: %s",
+                str(msg.content or "")[:300],
+            )
     except Exception as e:
         logger.warning("function_calling path failed: %s", e)
-        raw_text = ""
 
     # Pass 2: force JSON in prompt + manual parse
     fallback_system = (
@@ -131,7 +152,6 @@ async def structured_call(
         "請嚴格以 JSON 回傳，符合以下 schema，不要加 markdown code fence 以外的文字：\n"
         f"{json.dumps(schema.model_json_schema(), ensure_ascii=False)}"
     )
-    user_text = _flatten_content(user) if not isinstance(user, str) else user
     raw_text = await call_llm(
         system=fallback_system,
         messages=[{"role": "user", "content": user_text}],
@@ -244,30 +264,39 @@ async def vision_structured_call(
     user_content: list,
     max_tokens: int = 16384,
 ) -> T:
-    """Vision model 專用 structured call。對齊文字 path 的兩段式：
-    Pass 1: LangChain function_calling（tool）—— 多數 vision model 支援不穩，會 fallback
-    Pass 2: 嚴格 JSON prompt + 手動 parse（保留 multimodal content）
+    """Vision model 結構化呼叫。直接走 OpenAI client，保留 multimodal content。
+    Pass 1：function call；Pass 2：JSON prompt + 手動 parse。
+    兩段都帶 user 標籤，後台可歸戶。
     """
-    chat = _vision_chat.bind(max_tokens=max_tokens, **_langchain_user_kwargs())
+    tool = _pydantic_to_tool(schema)
+    tool_name = tool["function"]["name"]
 
-    # Pass 1: tool calling
+    # Pass 1: function calling with multimodal content
     try:
-        structured = chat.with_structured_output(
-            schema, method="function_calling", include_raw=True
+        response = await client.chat.completions.create(
+            model=settings.VISION_MODEL,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+            tools=[tool],
+            tool_choice={"type": "function", "function": {"name": tool_name}},
+            **_user_kwargs(),
         )
-        result = await structured.ainvoke([
-            SystemMessage(content=system),
-            HumanMessage(content=user_content),
-        ])
-        parsed = result.get("parsed") if isinstance(result, dict) else result
-        if parsed is not None:
-            return parsed
-        raw_msg: AIMessage | None = result.get("raw") if isinstance(result, dict) else None
-        raw_text = raw_msg.content if raw_msg else ""
-        logger.warning(
-            "vision function_calling returned no parsed object; raw preview: %s",
-            str(raw_text)[:300],
-        )
+        msg = response.choices[0].message
+        if msg.tool_calls:
+            args_str = msg.tool_calls[0].function.arguments
+            try:
+                data = json.loads(args_str)
+                return schema.model_validate(data)
+            except (json.JSONDecodeError, ValidationError) as e:
+                logger.warning("vision tool_call parse failed: %s; args preview: %s", e, args_str[:300])
+        else:
+            logger.warning(
+                "vision function_calling returned no tool call; raw preview: %s",
+                str(msg.content or "")[:300],
+            )
     except Exception as e:
         logger.warning("vision function_calling path failed: %s", e)
 
