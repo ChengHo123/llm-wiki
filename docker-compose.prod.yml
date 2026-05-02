@@ -28,8 +28,8 @@ services:
       LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
       STORE_MODEL_IN_DB: "True"
-      UI_USERNAME: ${ADMIN_USERNAME:-admin}
-      UI_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD:-admin}
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
     depends_on:
