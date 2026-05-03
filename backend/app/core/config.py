@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin"
 
+    # LINE bot 防腳本：per-user 限速（in-memory，重啟後重置）
+    LINE_USER_COOLDOWN_SECONDS: int = 5  # 同一 LINE 使用者兩則訊息間最短間隔
+    LINE_USER_RPM_LIMIT: int = 5         # 同一 LINE 使用者每分鐘最多訊息數
+
     class Config:
         env_file = ".env"
 

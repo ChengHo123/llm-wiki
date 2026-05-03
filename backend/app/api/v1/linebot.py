@@ -6,9 +6,11 @@ import json
 import logging
 import random
 import re
-from collections import deque
+import time
+from collections import defaultdict, deque
 
 import httpx
+import openai
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -108,6 +110,35 @@ def _strip_markdown(text: str) -> str:
     return text.strip()
 
 _pending_users: set[str] = set()
+
+# Per-user 限速（防腳本，不影響其他使用者）
+# in-memory dict，重啟後重置即可——LINE 端本來就無歷史可保留
+_user_last_message_at: dict[str, float] = {}
+_user_minute_calls: dict[str, deque] = defaultdict(deque)
+
+
+def _check_user_rate_limit(user_id: str) -> str | None:
+    """檢查單一 LINE 使用者的訊息頻率。
+    回傳錯誤訊息字串 → 被擋；回傳 None → 通過並已記錄此次訊息。
+    """
+    now = time.monotonic()
+
+    # 冷卻時間
+    last = _user_last_message_at.get(user_id, 0.0)
+    if now - last < settings.LINE_USER_COOLDOWN_SECONDS:
+        return "汪！主人太快了，嚕比要喘一下再回。"
+
+    # 每分鐘上限（滑動視窗）
+    dq = _user_minute_calls[user_id]
+    while dq and dq[0] < now - 60:
+        dq.popleft()
+    if len(dq) >= settings.LINE_USER_RPM_LIMIT:
+        return "汪！主人一分鐘問太多了，嚕比腦袋打結。等一下再問。"
+
+    _user_last_message_at[user_id] = now
+    dq.append(now)
+    return None
+
 
 # 每個 LINE user 的對話歷史 (最近 10 turns = 20 則訊息)
 HISTORY_MAXLEN = 20
@@ -437,6 +468,15 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
     logger.info("LINE event: user=%s question=%r", user_id[:8] if user_id else "?", question[:60])
     if user_id:
         current_end_user.set(line_tag(user_id))
+
+    # 防腳本：per-user 限速（在 loading 動畫之前判斷，被擋的訊息不要顯示「正在輸入」）
+    if user_id:
+        block_msg = _check_user_rate_limit(user_id)
+        if block_msg:
+            logger.info("LINE rate limit block: user=%s", user_id[:8])
+            await _reply(reply_token, block_msg)
+            return
+
     await _show_loading(user_id, 60)
 
     if question.strip() in GET_LINK_KEYWORDS:
@@ -484,6 +524,15 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
                     dq = _user_history.setdefault(user_id, deque(maxlen=HISTORY_MAXLEN))
                     dq.append({"role": "user", "content": question})
                     dq.append({"role": "assistant", "content": answer_text})
+            except openai.RateLimitError:
+                logger.warning("LINE query hit LLM rate limit (429)")
+                try:
+                    await _reply(
+                        reply_token,
+                        "汪！嚕比現在被太多主人圍住，喘不過氣。等個 30 秒再問嚕比一次。",
+                    )
+                except Exception:
+                    logger.exception("LINE rate-limit reply failed")
             except Exception:
                 logger.exception("LINE query error")
                 try:
