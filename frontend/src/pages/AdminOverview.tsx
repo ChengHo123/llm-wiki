@@ -8,7 +8,7 @@ import {
 import {
   adminOverview, adminSpend, adminLogout,
   type AdminOverview, type AdminLeaderEntry, type AdminTrendPoint,
-  type AdminSpend, type AdminSpendUser,
+  type AdminSpend, type AdminSpendUser, type AdminTokenTrendOut,
 } from '../api/client'
 import ThemeToggle from '../components/ThemeToggle'
 
@@ -355,6 +355,11 @@ export default function AdminOverviewPage() {
               </div>
 
               <h3 className="text-xs uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mb-2">
+                每日 Token 用量趨勢（總體 + Top 5 用戶）
+              </h3>
+              <TokenTrendChart trends={spend.trends} />
+
+              <h3 className="text-xs uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mt-5 mb-2">
                 每用戶 Token 消耗（Top 10）
               </h3>
               <SpendUserTable users={spend.by_user.slice(0, 10)} />
@@ -874,6 +879,148 @@ function QueryLineChart({ trends, granularity = 'day' }: { trends: AdminTrendPoi
         ) : null,
       )}
     </svg>
+  )
+}
+
+// 多用戶折線圖：總體（粗藍線）+ top 5 用戶各一條彩色線
+const SERIES_COLORS = ['#f97316', '#10b981', '#a855f7', '#ec4899', '#14b8a6']
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return n.toLocaleString()
+}
+
+function TokenTrendChart({ trends }: { trends: AdminTokenTrendOut }) {
+  const { dates, total_daily, top_users } = trends
+
+  if (dates.length === 0 || total_daily.every((v) => v === 0)) {
+    return (
+      <p className="text-sm text-zinc-400 dark:text-zinc-500 py-6 text-center">
+        範圍內尚無 token 用量資料
+      </p>
+    )
+  }
+
+  const W = 720, H = 200, padL = 44, padR = 12, padT = 10, padB = 26
+  const innerW = W - padL - padR
+  const innerH = H - padT - padB
+  const stepX = innerW / Math.max(dates.length - 1, 1)
+
+  // y 軸最大值取 total_daily 的最大；單個用戶不會超過 total
+  const max = Math.max(...total_daily, 1)
+  const yScale = (v: number) => innerH - (v / max) * innerH
+
+  const buildPath = (vals: number[]) =>
+    vals
+      .map((v, i) => {
+        const x = padL + i * stepX
+        const y = padT + yScale(v)
+        return `${i === 0 ? 'M' : 'L'}${x},${y}`
+      })
+      .join(' ')
+
+  const totalPath = buildPath(total_daily)
+  const userPaths = top_users.map((u) => buildPath(u.daily_tokens))
+
+  // y 軸 tick：4 等分
+  const ticks = [0, max * 0.25, max * 0.5, max * 0.75, max].map((v) => Math.round(v))
+  const labelStep = Math.max(1, Math.ceil(dates.length / 8))
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full text-zinc-200 dark:text-zinc-800"
+           preserveAspectRatio="none">
+        {/* y 軸格線 + 刻度 */}
+        {ticks.map((v, i) => (
+          <g key={i}>
+            <line
+              x1={padL} y1={padT + yScale(v)}
+              x2={padL + innerW} y2={padT + yScale(v)}
+              stroke="currentColor" strokeWidth={1}
+            />
+            <text
+              x={padL - 4} y={padT + yScale(v) + 3}
+              textAnchor="end" fontSize="10" fill={CHART_LABEL}
+            >
+              {formatTokens(v)}
+            </text>
+          </g>
+        ))}
+
+        {/* 各用戶折線（先畫，當底層） */}
+        {userPaths.map((d, i) => (
+          <path
+            key={top_users[i].end_user_tag + i}
+            d={d}
+            fill="none"
+            stroke={SERIES_COLORS[i % SERIES_COLORS.length]}
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+            strokeOpacity={0.85}
+          />
+        ))}
+
+        {/* 總體折線（粗藍線，畫在最上層） */}
+        <path d={totalPath} fill="none" stroke="#3b82f6" strokeWidth={2.5}
+              strokeLinejoin="round" strokeDasharray="4 3" />
+
+        {/* 總體節點（hover 顯示日期 + 數值） */}
+        {total_daily.map((v, i) => (
+          <circle
+            key={`total-${i}`}
+            cx={padL + i * stepX}
+            cy={padT + yScale(v)}
+            r={2.5}
+            fill="#3b82f6"
+          >
+            <title>{`${dates[i]}：總體 ${v.toLocaleString()} tokens`}</title>
+          </circle>
+        ))}
+
+        {/* x 軸日期標籤 */}
+        {dates.map((d, i) =>
+          i % labelStep === 0 || i === dates.length - 1 ? (
+            <text
+              key={d}
+              x={padL + i * stepX}
+              y={H - 8}
+              textAnchor="middle"
+              fontSize="9"
+              fill={CHART_LABEL}
+            >
+              {shortDate(d)}
+            </text>
+          ) : null,
+        )}
+      </svg>
+
+      {/* Legend */}
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+        <span className="inline-flex items-center gap-1.5 text-zinc-700 dark:text-zinc-200">
+          <svg width="18" height="6" className="flex-shrink-0">
+            <line x1="0" y1="3" x2="18" y2="3" stroke="#3b82f6" strokeWidth="2.5" strokeDasharray="4 3" />
+          </svg>
+          總體
+          <span className="text-zinc-400 dark:text-zinc-500 ml-0.5">
+            {trends.total_daily.reduce((s, v) => s + v, 0).toLocaleString()}
+          </span>
+        </span>
+        {top_users.map((u, i) => (
+          <span key={u.end_user_tag + i}
+                className="inline-flex items-center gap-1.5 text-zinc-700 dark:text-zinc-200">
+            <span
+              className="w-3 h-0.5 flex-shrink-0"
+              style={{ background: SERIES_COLORS[i % SERIES_COLORS.length] }}
+            />
+            <span className="truncate max-w-[8rem]" title={u.name}>{u.name}</span>
+            <span className="text-zinc-400 dark:text-zinc-500 ml-0.5">
+              {u.total_tokens.toLocaleString()}
+            </span>
+          </span>
+        ))}
+      </div>
+    </div>
   )
 }
 

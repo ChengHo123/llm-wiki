@@ -598,6 +598,22 @@ class SpendByModelEntry(BaseModel):
     spend_usd: float
 
 
+class TokenTrendSeries(BaseModel):
+    """單一 user 的 token 折線資料。daily_tokens 與 TokenTrendOut.dates 同長同序。"""
+    api_key_id: str | None
+    name: str
+    end_user_tag: str
+    total_tokens: int   # 範圍內加總，給前端排序 / tooltip 用
+    daily_tokens: list[int]
+
+
+class TokenTrendOut(BaseModel):
+    """Token 用量折線圖資料：x 軸 = dates，每條線 = total_daily 或 top_users[i].daily_tokens。"""
+    dates: list[str]            # YYYY-MM-DD（UTC），固定逐日
+    total_daily: list[int]      # 全平台每日 total tokens
+    top_users: list[TokenTrendSeries]  # 用量前 N 名（預設 5）
+
+
 class SpendOut(BaseModel):
     total_call_count: int
     total_prompt_tokens: int
@@ -608,6 +624,7 @@ class SpendOut(BaseModel):
     untagged_tokens: int
     by_user: list[SpendUserEntry]
     by_model: list[SpendByModelEntry]
+    trends: TokenTrendOut
     fetched_count: int  # 實際從 LiteLLM 拿到的 log 筆數
     note: str | None  # 提示訊息（例如資料截斷或對不到 user）
 
@@ -692,6 +709,11 @@ async def spend(
     by_model: dict[str, dict] = defaultdict(lambda: {
         "calls": 0, "in": 0, "out": 0, "tot": 0, "spend": 0.0,
     })
+
+    # Token 折線：以 startTime 前 10 字元（YYYY-MM-DD）做 daily bucket
+    daily_total: dict[str, int] = defaultdict(int)
+    daily_by_user: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
     total_calls = total_in = total_out = total_tot = 0
     total_spend = 0.0
     untagged_calls = untagged_tokens = 0
@@ -703,6 +725,7 @@ async def spend(
         tot = int(r.get("total_tokens") or 0)
         sp = float(r.get("spend") or 0.0)
         model = r.get("model") or "(unknown)"
+        day = (r.get("startTime") or "")[:10]  # "YYYY-MM-DD"，超出範圍的不會出現（已過濾）
 
         total_calls += 1
         total_in += prompt
@@ -727,21 +750,55 @@ async def spend(
         m["tot"] += tot
         m["spend"] += sp
 
-    user_entries: list[SpendUserEntry] = []
+        if day:
+            daily_total[day] += tot
+            daily_by_user[eu][day] += tot
+
+    # user_entries 同時保留 eu 以便後續用 daily_by_user[eu] 取折線資料
+    user_entries_with_eu: list[tuple[str, SpendUserEntry]] = []
     for eu, agg in by_user.items():
         kid, name, line_id = resolve_user(eu)
-        user_entries.append(SpendUserEntry(
-            api_key_id=str(kid) if kid else None,
-            name=name,
-            line_user_id=line_id,
-            end_user_tag=eu or "(無)",
-            call_count=agg["calls"],
-            prompt_tokens=agg["in"],
-            completion_tokens=agg["out"],
-            total_tokens=agg["tot"],
-            spend_usd=agg["spend"],
+        user_entries_with_eu.append((
+            eu,
+            SpendUserEntry(
+                api_key_id=str(kid) if kid else None,
+                name=name,
+                line_user_id=line_id,
+                end_user_tag=eu or "(無)",
+                call_count=agg["calls"],
+                prompt_tokens=agg["in"],
+                completion_tokens=agg["out"],
+                total_tokens=agg["tot"],
+                spend_usd=agg["spend"],
+            ),
         ))
-    user_entries.sort(key=lambda x: x.total_tokens, reverse=True)
+    user_entries_with_eu.sort(key=lambda x: x[1].total_tokens, reverse=True)
+    user_entries = [e for _, e in user_entries_with_eu]
+
+    # ── Token 折線資料 ──
+    dates: list[str] = []
+    day_iter = range_start
+    while day_iter.date() <= range_end.date():
+        dates.append(day_iter.date().isoformat())
+        day_iter += timedelta(days=1)
+
+    total_daily = [daily_total.get(d, 0) for d in dates]
+    top_users_series = [
+        TokenTrendSeries(
+            api_key_id=entry.api_key_id,
+            name=entry.name,
+            end_user_tag=entry.end_user_tag,
+            total_tokens=entry.total_tokens,
+            daily_tokens=[daily_by_user[eu].get(d, 0) for d in dates],
+        )
+        for eu, entry in user_entries_with_eu[:5]
+        if entry.total_tokens > 0
+    ]
+    trends = TokenTrendOut(
+        dates=dates,
+        total_daily=total_daily,
+        top_users=top_users_series,
+    )
 
     model_entries = [
         SpendByModelEntry(
@@ -778,6 +835,7 @@ async def spend(
         untagged_tokens=untagged_tokens,
         by_user=user_entries,
         by_model=model_entries,
+        trends=trends,
         fetched_count=len(logs),
         note=note,
     )

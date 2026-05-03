@@ -344,6 +344,20 @@ export interface AdminSpendModel {
   spend_usd: number
 }
 
+export interface AdminTokenTrendSeries {
+  api_key_id: string | null
+  name: string
+  end_user_tag: string
+  total_tokens: number
+  daily_tokens: number[]  // 與 AdminTokenTrendOut.dates 同長同序
+}
+
+export interface AdminTokenTrendOut {
+  dates: string[]               // YYYY-MM-DD
+  total_daily: number[]         // 每日全平台 total tokens
+  top_users: AdminTokenTrendSeries[]
+}
+
 export interface AdminSpend {
   range: AdminRange
   total_call_count: number
@@ -355,6 +369,7 @@ export interface AdminSpend {
   untagged_tokens: number
   by_user: AdminSpendUser[]
   by_model: AdminSpendModel[]
+  trends: AdminTokenTrendOut
   fetched_count: number
   note: string | null
 }
