@@ -8,6 +8,7 @@ import random
 import re
 import time
 from collections import defaultdict, deque
+from dataclasses import dataclass
 
 import httpx
 import openai
@@ -128,49 +129,10 @@ _pending_users: set[str] = set()
 _user_last_message_at: dict[str, float] = {}
 _user_minute_calls: dict[str, deque] = defaultdict(deque)
 
-
-def _check_user_rate_limit(user_id: str) -> str | None:
-    """檢查單一 LINE 使用者的訊息頻率。
-    回傳錯誤訊息字串 → 被擋；回傳 None → 通過並已記錄此次訊息。
-    """
-    now = time.monotonic()
-
-    # 冷卻時間
-    last = _user_last_message_at.get(user_id, 0.0)
-    if now - last < settings.LINE_USER_COOLDOWN_SECONDS:
-        return "汪！主人太快了，嚕比要喘一下再回。"
-
-    # 每分鐘上限（滑動視窗）
-    dq = _user_minute_calls[user_id]
-    while dq and dq[0] < now - 60:
-        dq.popleft()
-    if len(dq) >= settings.LINE_USER_RPM_LIMIT:
-        return "汪！主人一分鐘問太多了，嚕比腦袋打結。等一下再問。"
-
-    _user_last_message_at[user_id] = now
-    dq.append(now)
-    return None
-
-
 # 每個 LINE user 的對話歷史 (最近 10 turns = 20 則訊息)
 HISTORY_MAXLEN = 20
 _user_history: dict[str, deque] = {}
 
-BUSY_REPLIES = [
-    "汪！嚕比還在翻上一題，主人等等。",
-    "嚕比鼻子塞在書堆裡，主人先別丟新東西過來。",
-    "一次一個。嚕比小腦袋裝不下兩題。",
-    "主人，嚕比還在挖，先別吵 🐾",
-    "嚕比耳朵豎著呢，剛剛那題還沒翻完。",
-    "汪汪！後面那題嚕比先記下，做完上一個。",
-    "主人先坐好，嚕比馬上把上一題叼回來。",
-    "嗅到了嗅到了，嚕比快找到上一題答案。",
-    "嚕比正盯著 wiki 不動，主人別催。",
-    "汪！主人連發太快，嚕比追不上。先把上一題答完。",
-]
-
-
-OWNER_USER_ID = "U6e631d9773cf56815461fb45b622a602"
 
 RUBY_CORE = """你叫「嚕比」，是個性高冷的母小白柴犬，當 wiki 小幫手。
 你是真的狗，不是擬人化的女孩。
@@ -208,8 +170,145 @@ GUEST_OVERLAY = """
 - 不要主動講家人或主人的私事
 """
 
-RUBY_PERSONA = RUBY_CORE + OWNER_OVERLAY
-RUBY_GUEST_PERSONA = RUBY_CORE + GUEST_OVERLAY
+
+@dataclass(frozen=True)
+class RubyVoice:
+    """同一個嚕比，依對方身分切換口吻。把 persona 跟所有定型文綁在一起，
+    新增 line 時兩個 voice 必須一起改，避免漏掉訪客版本。"""
+    persona: str                       # call_llm system prompt
+    knowledge_overview_prompt: str     # 「嚕比知道什麼」彙整 LLM system prompt
+    busy_replies: tuple[str, ...]      # _pending_users 撞上時隨機抽
+    cooldown_msg: str                  # 兩則訊息間隔 < cooldown
+    rpm_limit_msg: str                 # 每分鐘上限
+    reset_done_msg: str                # postback action=reset
+    no_user_id_msg: str                # 拿不到 LINE userId
+    no_user_id_with_hint_msg: str      # 同上 + 提示先加好友
+    login_link_template: str           # {url} 帶入
+    unknown_button_msg: str            # 不認得的 postback
+    knowledge_empty_msg: str           # wiki 沒任何頁面
+    knowledge_failed_template: str     # 整理失敗，{n} 為頁數
+    llm_rate_limit_msg: str            # openai 429
+    error_msg: str                     # 通用 fallback
+
+
+OWNER_VOICE = RubyVoice(
+    persona=RUBY_CORE + OWNER_OVERLAY,
+    knowledge_overview_prompt="""你是嚕比（母小白柴犬）。
+我會給你一份你 wiki 裡所有頁面的標題列表。請用嚕比的狗口吻，
+整理出 3~5 個大方向主題，每個主題一行、不超過 30 字，給主人一個概覽。
+
+絕對規則：
+- 只給主題大方向，不要列出具體頁面標題
+- 不要分類成「實體」「概念」這類抽象類別
+- 每個主題用一句話說「這類東西大概是什麼」
+- 開頭加一句嚕比的口吻引言（例如：汪！嚕比 wiki 裡聞到這些大方向…）
+- 結尾加一句邀請（例如：想知道哪一塊主人就直接問嚕比 🐾）
+- 純文字，不用 markdown，不用 # 或 *
+""",
+    busy_replies=(
+        "汪！嚕比還在翻上一題，主人等等。",
+        "嚕比鼻子塞在書堆裡，主人先別丟新東西過來。",
+        "一次一個。嚕比小腦袋裝不下兩題。",
+        "主人，嚕比還在挖，先別吵 🐾",
+        "嚕比耳朵豎著呢，剛剛那題還沒翻完。",
+        "汪汪！後面那題嚕比先記下，做完上一個。",
+        "主人先坐好，嚕比馬上把上一題叼回來。",
+        "嗅到了嗅到了，嚕比快找到上一題答案。",
+        "嚕比正盯著 wiki 不動，主人別催。",
+        "汪！主人連發太快，嚕比追不上。先把上一題答完。",
+    ),
+    cooldown_msg="汪！主人太快了，嚕比要喘一下再回。",
+    rpm_limit_msg="汪！主人一分鐘問太多了，嚕比腦袋打結。等一下再問。",
+    reset_done_msg="汪！嚕比把剛剛的事情都甩掉了。主人來新話題吧 🐾",
+    no_user_id_msg="嚕比認不出主人是誰。",
+    no_user_id_with_hint_msg="嚕比認不出主人是誰，先加好友。",
+    login_link_template=(
+        "汪！主人的 wiki 連結來了 🐾\n"
+        "{url}\n\n"
+        "點下去就能上傳文件給嚕比。連結 24 小時內有效。"
+    ),
+    unknown_button_msg="汪？嚕比看不懂這個按鈕。",
+    knowledge_empty_msg="汪？嚕比的 wiki 裡空空的，主人還沒給東西餵嚕比。",
+    knowledge_failed_template="汪！嚕比 wiki 裡有 {n} 頁東西，但整理時鼻子打結了，主人晚點再問嚕比一次。",
+    llm_rate_limit_msg="汪！嚕比現在被太多主人圍住，喘不過氣。等個 30 秒再問嚕比一次。",
+    error_msg="汪！嚕比剛剛被書絆倒了，主人再丟一次問題過來。",
+)
+
+GUEST_VOICE = RubyVoice(
+    persona=RUBY_CORE + GUEST_OVERLAY,
+    knowledge_overview_prompt="""你是嚕比（母小白柴犬）。
+我會給你一份你 wiki 裡所有頁面的標題列表。請用嚕比的狗口吻，
+整理出 3~5 個大方向主題，每個主題一行、不超過 30 字，給對方一個概覽。
+
+絕對規則：
+- 對方是訪客而非主人。稱「你」或不稱呼，絕不叫「主人」
+- 比對主人正式一點，少用「汪」
+- 只給主題大方向，不要列出具體頁面標題
+- 不要分類成「實體」「概念」這類抽象類別
+- 每個主題用一句話說「這類東西大概是什麼」
+- 開頭加一句嚕比的口吻引言（例如：嚕比 wiki 裡聞到這些大方向…）
+- 結尾加一句邀請（例如：想知道哪一塊就直接問嚕比 🐾）
+- 純文字，不用 markdown，不用 # 或 *
+""",
+    busy_replies=(
+        "嚕比還在翻上一題，等一下。",
+        "嚕比鼻子塞在書堆裡，先別丟新東西過來。",
+        "一次一個，嚕比小腦袋裝不下兩題。",
+        "嚕比還在挖，先別吵 🐾",
+        "嚕比耳朵豎著呢，剛剛那題還沒翻完。",
+        "後面那題嚕比先記下，做完上一個。",
+        "等一下，嚕比馬上把上一題叼回來。",
+        "嗅到了，嚕比快找到上一題答案。",
+        "嚕比正盯著 wiki 不動，別催。",
+        "連發太快，嚕比追不上。先把上一題答完。",
+    ),
+    cooldown_msg="你太快了，嚕比要喘一下再回。",
+    rpm_limit_msg="你一分鐘問太多了，嚕比腦袋打結。等一下再問。",
+    reset_done_msg="嚕比把剛剛的事情都甩掉了。換個新話題吧 🐾",
+    no_user_id_msg="嚕比認不出你是誰。",
+    no_user_id_with_hint_msg="嚕比認不出你是誰，先加好友。",
+    login_link_template=(
+        "你的 wiki 連結 🐾\n"
+        "{url}\n\n"
+        "點下去就能上傳文件給嚕比。連結 24 小時內有效。"
+    ),
+    unknown_button_msg="嚕比看不懂這個按鈕。",
+    knowledge_empty_msg="wiki 裡空空的，還沒人丟東西給嚕比。",
+    knowledge_failed_template="嚕比 wiki 裡有 {n} 頁東西，但整理時鼻子打結了，等一下再問一次。",
+    llm_rate_limit_msg="嚕比現在被太多人圍住，喘不過氣。等個 30 秒再問一次。",
+    error_msg="嚕比剛剛被書絆倒了，再丟一次問題過來。",
+)
+
+
+def _voice_for(user_id: str | None) -> RubyVoice:
+    """主人清單由 LINE_OWNER_USER_IDS env 管。沒命中（含拿不到 user_id）一律當訪客。"""
+    if user_id and user_id in settings.line_owner_user_ids:
+        return OWNER_VOICE
+    return GUEST_VOICE
+
+
+def _check_user_rate_limit(user_id: str) -> str | None:
+    """檢查單一 LINE 使用者的訊息頻率。
+    回傳錯誤訊息字串 → 被擋；回傳 None → 通過並已記錄此次訊息。
+    """
+    now = time.monotonic()
+    voice = _voice_for(user_id)
+
+    # 冷卻時間
+    last = _user_last_message_at.get(user_id, 0.0)
+    if now - last < settings.LINE_USER_COOLDOWN_SECONDS:
+        return voice.cooldown_msg
+
+    # 每分鐘上限（滑動視窗）
+    dq = _user_minute_calls[user_id]
+    while dq and dq[0] < now - 60:
+        dq.popleft()
+    if len(dq) >= settings.LINE_USER_RPM_LIMIT:
+        return voice.rpm_limit_msg
+
+    _user_last_message_at[user_id] = now
+    dq.append(now)
+    return None
 
 
 def _verify_signature(body: bytes, signature: str) -> bool:
@@ -385,21 +484,7 @@ async def _get_or_create_api_key(line_user_id: str, db: AsyncSession) -> ApiKey:
     return api_key
 
 
-KNOWLEDGE_SUMMARY_PROMPT = """你是嚕比（母小白柴犬）。
-我會給你一份你 wiki 裡所有頁面的標題列表。請用嚕比的狗口吻，
-整理出 3~5 個大方向主題，每個主題一行、不超過 30 字，給主人一個概覽。
-
-絕對規則：
-- 只給主題大方向，不要列出具體頁面標題
-- 不要分類成「實體」「概念」這類抽象類別
-- 每個主題用一句話說「這類東西大概是什麼」
-- 開頭加一句嚕比的口吻引言（例如：汪！嚕比 wiki 裡聞到這些大方向…）
-- 結尾加一句邀請（例如：想知道哪一塊主人就直接問嚕比 🐾）
-- 純文字，不用 markdown，不用 # 或 *
-"""
-
-
-async def _build_knowledge_summary(api_key: ApiKey) -> str:
+async def _build_knowledge_summary(api_key: ApiKey, voice: RubyVoice) -> str:
     """嚕比簡述 wiki 主題大方向（不列具體頁面）。"""
     async with AsyncSessionLocal() as db:
         pages_result = await db.execute(
@@ -410,21 +495,21 @@ async def _build_knowledge_summary(api_key: ApiKey) -> str:
         pages = pages_result.scalars().all()
 
     if not pages:
-        return "汪？嚕比的 wiki 裡空空的，主人還沒給東西餵嚕比。"
+        return voice.knowledge_empty_msg
 
     titles_block = "\n".join(f"- {p.title}" for p in pages)
     user_msg = f"wiki 共 {len(pages)} 頁。標題列表：\n{titles_block}"
 
     try:
         overview = await call_llm(
-            system=KNOWLEDGE_SUMMARY_PROMPT,
+            system=voice.knowledge_overview_prompt,
             messages=[{"role": "user", "content": user_msg}],
             max_tokens=512,
         )
         overview = overview.strip()
     except Exception as e:
         logger.exception("knowledge summary LLM failed: %s", e)
-        return f"汪！嚕比 wiki 裡有 {len(pages)} 頁東西，但整理時鼻子打結了，主人晚點再問嚕比一次。"
+        return voice.knowledge_failed_template.format(n=len(pages))
 
     return f"嚕比 wiki 裡有 {len(pages)} 頁。\n\n{overview}"
 
@@ -433,6 +518,7 @@ async def _handle_postback(reply_token: str, user_id: str, data: str) -> None:
     """處理 quick reply / rich menu 按鈕觸發的 postback。"""
     if user_id:
         current_end_user.set(line_tag(user_id))
+    voice = _voice_for(user_id)
     await _show_loading(user_id, 30)
     params = dict(p.split("=", 1) for p in data.split("&") if "=" in p)
     action = params.get("action")
@@ -442,16 +528,16 @@ async def _handle_postback(reply_token: str, user_id: str, data: str) -> None:
         if user_id:
             _user_history.pop(user_id, None)
             _pending_users.discard(user_id)
-        await _reply(reply_token, "汪！嚕比把剛剛的事情都甩掉了。主人來新話題吧 🐾")
+        await _reply(reply_token, voice.reset_done_msg)
         return
 
     if action == "knowledge":
         if not user_id:
-            await _reply(reply_token, "嚕比認不出主人是誰。")
+            await _reply(reply_token, voice.no_user_id_msg)
             return
         async with AsyncSessionLocal() as db:
             api_key = await _get_or_create_api_key(user_id, db)
-        summary = await _build_knowledge_summary(api_key)
+        summary = await _build_knowledge_summary(api_key, voice)
         await _reply(reply_token, summary)
         return
 
@@ -459,7 +545,7 @@ async def _handle_postback(reply_token: str, user_id: str, data: str) -> None:
         await _send_login_link(reply_token, user_id)
         return
 
-    await _reply(reply_token, "汪？嚕比看不懂這個按鈕。")
+    await _reply(reply_token, voice.unknown_button_msg)
 
 
 # Rich Menu / 文字觸發都會打到這裡
@@ -468,8 +554,9 @@ GET_LINK_KEYWORDS = {"取得連結", "登入網頁", "wiki 連結", "/link"}
 
 async def _send_login_link(reply_token: str, user_id: str) -> None:
     """產生 WebSession 並回覆一鍵登入連結。"""
+    voice = _voice_for(user_id)
     if not user_id:
-        await _reply(reply_token, "嚕比認不出主人是誰，先加好友。")
+        await _reply(reply_token, voice.no_user_id_with_hint_msg)
         return
     async with AsyncSessionLocal() as db:
         api_key = await _get_or_create_api_key(user_id, db)
@@ -477,12 +564,7 @@ async def _send_login_link(reply_token: str, user_id: str) -> None:
         db.add(WebSession(session_token=session_token, api_key_id=api_key.id))
         await db.commit()
     url = f"{settings.FRONTEND_URL.rstrip('/')}/m?token={session_token}"
-    msg = (
-        "汪！主人的 wiki 連結來了 🐾\n"
-        f"{url}\n\n"
-        "點下去就能上傳文件給嚕比。連結 24 小時內有效。"
-    )
-    await _reply(reply_token, msg, with_quick_reply=False)
+    await _reply(reply_token, voice.login_link_template.format(url=url), with_quick_reply=False)
 
 
 async def _handle_follow_event(user_id: str) -> None:
@@ -497,6 +579,7 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
     logger.info("LINE event: user=%s question=%r", user_id[:8] if user_id else "?", question[:60])
     if user_id:
         current_end_user.set(line_tag(user_id))
+    voice = _voice_for(user_id)
 
     # 防腳本：per-user 限速（在 loading 動畫之前判斷，被擋的訊息不要顯示「正在輸入」）
     if user_id:
@@ -513,18 +596,18 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
         return
 
     if user_id and user_id in _pending_users:
-        await _reply(reply_token, random.choice(BUSY_REPLIES))
+        await _reply(reply_token, random.choice(voice.busy_replies))
         return
 
     # 「嚕比知道什麼」/「嚕比知道什麼？」/「嚕比知道什麼嗎」等變體
     normalized = question.replace("？", "").replace("?", "").replace("嗎", "").strip()
     if normalized == "嚕比知道什麼":
         if not user_id:
-            await _reply(reply_token, "嚕比認不出主人是誰。")
+            await _reply(reply_token, voice.no_user_id_msg)
             return
         async with AsyncSessionLocal() as db:
             api_key = await _get_or_create_api_key(user_id, db)
-        summary = await _build_knowledge_summary(api_key)
+        summary = await _build_knowledge_summary(api_key, voice)
         await _reply(reply_token, summary)
         return
 
@@ -535,18 +618,17 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
         async with AsyncSessionLocal() as db:
             try:
                 if not user_id:
-                    await _reply(reply_token, "嚕比認不出主人是誰，先加好友。")
+                    await _reply(reply_token, voice.no_user_id_with_hint_msg)
                     return
 
                 api_key = await _get_or_create_api_key(user_id, db)
                 history = list(_user_history.get(user_id, [])) if user_id else []
-                persona = RUBY_PERSONA if user_id == OWNER_USER_ID else RUBY_GUEST_PERSONA
                 data = await run_query(
                     question=question,
                     api_key_id=api_key.id,
                     db=db,
                     save_to_wiki=True,
-                    persona=persona,
+                    persona=voice.persona,
                     history=history,
                 )
                 answer_text = data["answer"]
@@ -558,16 +640,13 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
             except openai.RateLimitError:
                 logger.warning("LINE query hit LLM rate limit (429)")
                 try:
-                    await _reply(
-                        reply_token,
-                        "汪！嚕比現在被太多主人圍住，喘不過氣。等個 30 秒再問嚕比一次。",
-                    )
+                    await _reply(reply_token, voice.llm_rate_limit_msg)
                 except Exception:
                     logger.exception("LINE rate-limit reply failed")
             except Exception:
                 logger.exception("LINE query error")
                 try:
-                    await _reply(reply_token, "汪！嚕比剛剛被書絆倒了，主人再丟一次問題過來。")
+                    await _reply(reply_token, voice.error_msg)
                 except Exception:
                     logger.exception("LINE fallback reply also failed")
     finally:

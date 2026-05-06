@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # LINE Bot
     LINE_CHANNEL_SECRET: str = ""
     LINE_CHANNEL_ACCESS_TOKEN: str = ""
+    # 嚕比認得的主人 LINE userId 清單，逗號分隔。命中者用「主人」口吻 + 完整人格；
+    # 未命中者用訪客口吻。空字串 → 沒有主人，所有人都當訪客。
+    LINE_OWNER_USER_IDS: str = ""
 
     # Frontend URL（用於 LINE bot 推送登入連結）
     FRONTEND_URL: str = "http://localhost:3000"
@@ -33,6 +36,12 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
+    @property
+    def line_owner_user_ids(self) -> frozenset[str]:
+        return frozenset(
+            uid.strip() for uid in self.LINE_OWNER_USER_IDS.split(",") if uid.strip()
+        )
 
 
 @lru_cache
