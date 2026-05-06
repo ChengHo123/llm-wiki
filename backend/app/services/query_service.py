@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.wiki_page import WikiPage
-from app.models.wiki_link import WikiLink
 from app.models.activity_log import ActivityLog
 from app.services.llm import call_llm, stream_llm, structured_call
 from app.core.config import get_settings
@@ -93,35 +92,60 @@ QUERY_SYSTEM_PROMPT = """你是一個個人知識庫助理。
 - 回答要清楚、有條理
 """
 
-# Phase 3：判斷是否值得存回 wiki
-JUDGE_SAVE_PROMPT = """你是一個知識庫策展人，負責判斷某個問答是否值得加入 wiki。
+# Wiki 靈魂：所有策展類 LLM 都要先讀這段，避免方向走偏
+WIKI_SOUL = """## 這個 wiki 的靈魂
 
-判斷標準：
-- save=true：問答產生了新知識、具通用參考價值、能補充既有 wiki 缺口
-- save=false：閒聊、重複既有內容、過於瑣碎、一次性查詢、wiki 已覆蓋
+- wiki 是「蒸餾後的結構化知識」，不是對話存檔，也不是搜尋紀錄
+- 每頁有明確 entity/concept，互相交叉連結，追求知識複利累積
+- 知識主要來源是使用者主動餵入的文件；聊天只能「補充」既有方向，不能「主導」wiki 走向
+- 你的職責是守門人，不是照單全收。寧可拒絕，也不要讓低品質內容稀釋 wiki 價值
 """
 
-# Phase 4：策展（Curate / Lint）— 決定如何把新知識整合進 wiki
-REFINE_SYSTEM_PROMPT = """你是個人 wiki 的策展人（curator）。
-你的任務是把一段 Q&A 得到的新知識整合進既有 wiki，讓 wiki 自我精煉。
 
-輸入：
+# Phase 3：判斷是否值得存回 wiki
+JUDGE_SAVE_PROMPT = WIKI_SOUL + """
+## 你的任務
+判斷一段聊天問答是否值得整合進 wiki。
+
+## save=true 的情況（任一滿足）
+1. 答案揭露既有頁面之間的**新連結**（A 和 B 原本沒交叉引用，但答案說明了關係）
+2. 答案對某個既有頁面有**實質補充**（新 context / 細節 / 修正，且與原頁不重複）
+3. 答案合成出一個**還沒有獨立頁面的新概念**，且概念足夠獨立、普適
+
+## save=false 的硬性拒絕條件（任一命中即拒）
+- 答案只是重述現有 wiki 頁面內容，無增量價值
+- 低信心 / 模糊推測（出現「可能」「不太確定」「也許」「我猜」）
+- 問題屬個人事務 / 閒聊 / 不屬知識庫主題
+- 答案與 wiki 既有知識方向相悖，可能是錯誤資訊
+- 問題本身已有完整 wiki 頁面可以直接回答
+
+寧可錯殺，不可讓垃圾汙染 wiki。
+"""
+
+
+# Phase 4：策展（Curate）— 決定如何把新知識整合進 wiki
+REFINE_SYSTEM_PROMPT = WIKI_SOUL + """
+## 你的任務
+把一段 Q&A 的新知識，**忠於 wiki 靈魂地**整合進既有 wiki。
+
+## 輸入
 - 使用者問題 + LLM 回答
 - 既有相關 wiki 頁面（含完整內容）
 
-請輸出一組 edits（對 wiki 頁面的編輯動作）：
-- action=update：改寫某個既有頁（slug 必須是輸入中出現過的既有頁 slug）
-  → content: 把新資訊整合進原頁，保留原本精髓，以 Markdown 撰寫，使用 [[頁面標題]] 跨頁連結
-- action=create：建立新 entity/concept 頁（僅當新資訊無法併入任一既有頁時）
-  → slug: 英文 kebab-case，避免與既有頁衝突
-  → page_type: entity（人/組織/產品）或 concept（概念/技術）
+## 三種正確做法（對應到 action）
+1. **update（補充既有頁）**：答案對某既有頁有新 context / 細節 / 連結 → 改寫該頁，**保留原精髓**，自然嵌入新資訊與 [[跨頁連結]]
+2. **create（新建頁面）**：答案合成出一個獨立、普適的新 entity/concept，且**真的找不到既有頁可併入**
+3. **skip（不存）**：edits 回傳空列表
 
-規則：
-- 優先 update，不要動不動 create
-- 若 Q&A 沒新資訊、或資訊已完整存在於既有頁，edits 回傳空列表（即 skip）
-- 絕對不要建立 "Q: xxx" 或 "query-xxx" 這類 Q&A 紀錄頁
-- 每個 edit 都要給 reason 說明動機
-- 一次可以產多個 edit（例如 update 兩頁 + create 一新 concept 頁）
+## 嚴格規則
+- 優先 update，慎用 create（每多一個低價值頁面都在汙染 wiki）
+- update 的 slug 必須是輸入中既有頁的 slug，不准創新
+- create 的 slug 要英文 kebab-case，且避免和既有頁衝突
+- page_type 只能是 entity（人/組織/產品）或 concept（概念/技術）
+- **絕對禁止**建立 "Q: xxx"、"query-xxx"、"chat-xxx"、"如何xxx" 這類 Q&A 風格頁面
+- update 時 content 要是**整合後完整新版本**，不是 diff、不是片段
+- 每個 edit 都要給 reason 說明動機，方便事後追蹤
+- 不確定要不要存 → skip。寧可漏存，不可亂建頁
 """
 
 
@@ -393,6 +417,7 @@ async def run_query(
             "answer": answer,
             "referenced_pages": [],
             "saved_page": None,
+            "wiki_save": None,
             "route": {"need_wiki": False, "reason": decision.reason},
         }
 
@@ -416,62 +441,42 @@ async def run_query(
 
     referenced_pages = [{"id": str(p.id), "title": p.title, "slug": p.slug} for p in pages]
 
-    # 選擇性存回 wiki
-    saved_page = None
+    # 選擇性存回 wiki — 走 wiki manager 流程：judge → refine → apply
+    wiki_save = None
     if save_to_wiki:
-        slug = f"query-{slugify(question[:50])}"
-        title = f"Q: {question[:100]}"
-        content = f"## 問題\n{question}\n\n## 回答\n{answer}"
-
-        existing = await db.execute(
-            select(WikiPage).where(
-                WikiPage.api_key_id == api_key_id,
-                WikiPage.slug == slug,
-            )
-        )
-        page = existing.scalar_one_or_none()
-        if page:
-            page.content = content
-            page.updated_at = datetime.utcnow()
-            # 清除舊連結，重新建立
-            old_links = await db.execute(
-                select(WikiLink).where(WikiLink.source_page_id == page.id)
-            )
-            for lnk in old_links.scalars():
-                await db.delete(lnk)
-        else:
-            page = WikiPage(
-                api_key_id=api_key_id,
-                title=title,
-                slug=slug,
-                content=content,
-                page_type="concept",
-            )
-            db.add(page)
-        await db.flush()
-
-        # 建立與被參考頁面的連結
-        for ref_page in pages:
-            if ref_page.id != page.id:
-                db.add(WikiLink(
-                    source_page_id=page.id,
-                    target_page_id=ref_page.id,
-                    link_text=f"參考：{ref_page.title}",
-                ))
-
-        saved_page = {"id": str(page.id), "title": title, "slug": slug}
+        save_decision, save_reason = await judge_save_decision(question, answer, referenced_pages)
+        applied_edits: list[dict] = []
+        refine_summary = ""
+        if save_decision:
+            try:
+                plan = await refine_wiki_plan(question, answer, pages)
+                refine_summary = plan.summary
+                applied_edits = await apply_refine_plan(plan, api_key_id, db)
+            except Exception as e:
+                refine_summary = f"refine 失敗：{e}"
+        wiki_save = {
+            "save_decision": save_decision,
+            "judge_reason": save_reason,
+            "applied_edits": applied_edits,
+            "refine_summary": refine_summary,
+        }
 
     db.add(ActivityLog(
         api_key_id=api_key_id,
         action="query",
-        details={"pages_referenced": len(pages), "saved_to_wiki": save_to_wiki},
+        details={
+            "pages_referenced": len(pages),
+            "save_decision": (wiki_save or {}).get("save_decision"),
+            "edits_applied": (wiki_save or {}).get("applied_edits", []),
+        },
     ))
     await db.commit()
 
     return {
         "answer": answer,
         "referenced_pages": referenced_pages,
-        "saved_page": saved_page,
+        "saved_page": None,  # 多頁編輯不再單一返回，保留欄位給 schema 相容
+        "wiki_save": wiki_save,
     }
 
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Users, LogOut, RefreshCw, MessageCircle, FileText, Activity, BarChart3 } from 'lucide-react'
-import { adminListUsers, adminLogout, type AdminUserSummary } from '../api/client'
+import { Users, LogOut, RefreshCw, MessageCircle, FileText, Activity, BarChart3, UserCheck } from 'lucide-react'
+import { adminListUsers, adminLogout, adminBackfillLineNames, type AdminUserSummary } from '../api/client'
 import ThemeToggle from '../components/ThemeToggle'
 
 export default function AdminUsers() {
@@ -42,6 +42,21 @@ export default function AdminUsers() {
     navigate('/admin/login')
   }
 
+  const [backfilling, setBackfilling] = useState(false)
+  const handleBackfill = async () => {
+    if (backfilling) return
+    setBackfilling(true)
+    try {
+      const r = await adminBackfillLineNames()
+      alert(`掃描 ${r.scanned}，更新 ${r.updated}，失敗 ${r.failed}`)
+      await load()
+    } catch (e: any) {
+      alert(e.response?.data?.detail || '補抓失敗')
+    } finally {
+      setBackfilling(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-6">
       <div className="max-w-6xl mx-auto">
@@ -69,6 +84,18 @@ export default function AdminUsers() {
               <BarChart3 size={14} />
               平台總覽
             </Link>
+            <button
+              onClick={handleBackfill}
+              disabled={backfilling}
+              className="text-zinc-500 dark:text-zinc-400
+                         hover:text-zinc-900 dark:hover:text-zinc-100
+                         hover:bg-zinc-100 dark:hover:bg-zinc-800
+                         disabled:opacity-50 disabled:cursor-not-allowed
+                         w-8 h-8 rounded-lg inline-flex items-center justify-center transition-colors"
+              title="補抓 LINE 顯示名稱"
+            >
+              <UserCheck size={15} className={backfilling ? 'animate-pulse' : ''} />
+            </button>
             <button
               onClick={load}
               className="text-zinc-500 dark:text-zinc-400

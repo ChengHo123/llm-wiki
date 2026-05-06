@@ -260,8 +260,9 @@ async def overview(
     # ── Leaderboards ──────────────────────────────────────
     bindings = (await db.execute(select(LineUserBinding))).scalars().all()
     line_map = {b.api_key_id: b.line_user_id for b in bindings}
+    display_map = {b.api_key_id: b.display_name for b in bindings if b.display_name}
     keys = (await db.execute(select(ApiKey))).scalars().all()
-    name_map = {k.id: k.name for k in keys}
+    name_map = {k.id: display_map.get(k.id) or k.name for k in keys}
 
     def build_leader(rows: list[tuple[uuid.UUID, int]]) -> list[LeaderEntry]:
         return [
@@ -423,6 +424,7 @@ async def list_users(
 
     bindings = (await db.execute(select(LineUserBinding))).scalars().all()
     line_map = {b.api_key_id: b.line_user_id for b in bindings}
+    name_map = {b.api_key_id: b.display_name for b in bindings if b.display_name}
 
     out: list[UserSummary] = []
     for k in api_keys:
@@ -456,7 +458,7 @@ async def list_users(
         out.append(
             UserSummary(
                 api_key_id=str(k.id),
-                name=k.name,
+                name=name_map.get(k.id) or k.name,
                 line_user_id=line_id,
                 end_user_tag=f"line-{line_id}" if line_id else f"web-{k.id}",
                 created_at=k.created_at.isoformat(),
@@ -525,10 +527,11 @@ async def user_detail(
         )
     ).scalar_one()
 
+    display_name = binding.display_name if binding else None
     return UserDetail(
         summary=UserSummary(
             api_key_id=str(api_key.id),
-            name=api_key.name,
+            name=display_name or api_key.name,
             line_user_id=line_id,
             end_user_tag=f"line-{line_id}" if line_id else f"web-{api_key.id}",
             created_at=api_key.created_at.isoformat(),
@@ -549,6 +552,53 @@ async def user_detail(
             for d in docs
         ],
     )
+
+
+# ── LINE display name 補抓 ────────────────────────────
+
+
+class BackfillResult(BaseModel):
+    scanned: int
+    updated: int
+    failed: int
+
+
+@router.post("/admin/line/backfill-display-names", response_model=BackfillResult)
+async def backfill_line_display_names(
+    _: None = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """掃所有沒 display_name 的 LINE binding，打 LINE profile API 補齊。
+    同時更新對應 api_key.name。"""
+    from app.api.v1.linebot import _fetch_line_display_name
+
+    bindings = (
+        await db.execute(
+            select(LineUserBinding).where(LineUserBinding.display_name.is_(None))
+        )
+    ).scalars().all()
+
+    scanned = len(bindings)
+    updated = 0
+    failed = 0
+
+    for b in bindings:
+        name = await _fetch_line_display_name(b.line_user_id)
+        if not name:
+            failed += 1
+            continue
+        b.display_name = name
+        api_key = (
+            await db.execute(select(ApiKey).where(ApiKey.id == b.api_key_id))
+        ).scalar_one_or_none()
+        if api_key and api_key.name.startswith("LINE:"):
+            api_key.name = name
+        updated += 1
+
+    if updated:
+        await db.commit()
+
+    return BackfillResult(scanned=scanned, updated=updated, failed=failed)
 
 
 # ── Document control（admin 跨 user 重試）─────────────
@@ -678,8 +728,9 @@ async def spend(
     # ── 建立 end_user_tag → api_key_id 對應 ──
     bindings = (await db.execute(select(LineUserBinding))).scalars().all()
     line_to_key: dict[str, uuid.UUID] = {b.line_user_id: b.api_key_id for b in bindings}
+    display_map: dict[uuid.UUID, str] = {b.api_key_id: b.display_name for b in bindings if b.display_name}
     keys = (await db.execute(select(ApiKey))).scalars().all()
-    name_map: dict[uuid.UUID, str] = {k.id: k.name for k in keys}
+    name_map: dict[uuid.UUID, str] = {k.id: display_map.get(k.id) or k.name for k in keys}
     line_map_rev: dict[uuid.UUID, str] = {b.api_key_id: b.line_user_id for b in bindings}
 
     def resolve_user(end_user: str) -> tuple[uuid.UUID | None, str, str | None]:

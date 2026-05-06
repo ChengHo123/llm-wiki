@@ -316,6 +316,17 @@ export async function adminListUsers(): Promise<AdminUserSummary[]> {
   return res.data
 }
 
+export interface AdminBackfillResult {
+  scanned: number
+  updated: number
+  failed: number
+}
+
+export async function adminBackfillLineNames(): Promise<AdminBackfillResult> {
+  const res = await adminApi.post('/admin/line/backfill-display-names')
+  return res.data
+}
+
 export async function adminOverview(start?: string, end?: string): Promise<AdminOverview> {
   const res = await adminApi.get('/admin/overview', {
     params: { start_date: start, end_date: end },

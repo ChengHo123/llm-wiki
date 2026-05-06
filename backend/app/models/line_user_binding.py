@@ -12,4 +12,5 @@ class LineUserBinding(Base):
 
     line_user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     api_key_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

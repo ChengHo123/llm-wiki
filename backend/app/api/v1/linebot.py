@@ -70,6 +70,18 @@ async def close_line_client() -> None:
         _line_client = None
 
 
+async def _fetch_line_display_name(user_id: str) -> str | None:
+    """打 LINE profile API 拿 displayName。失敗回 None，不阻斷流程。"""
+    try:
+        client = _get_line_client()
+        resp = await client.get(f"https://api.line.me/v2/bot/profile/{user_id}")
+        if resp.status_code == 200:
+            return resp.json().get("displayName")
+    except Exception as e:
+        logger.warning("LINE profile fetch failed for %s: %s", user_id[:8], e)
+    return None
+
+
 # LINE 不支援 markdown，LLM 偶爾會無視 prompt 仍然輸出。送出前一律剝掉。
 _MD_FENCED = re.compile(r"```(?:\w+)?\s*\n?([\s\S]*?)```")
 _MD_INLINE_CODE = re.compile(r"`([^`\n]+)`")
@@ -158,39 +170,46 @@ BUSY_REPLIES = [
 ]
 
 
-RUBY_PERSONA = """你叫「嚕比」，是主人養的個性高冷的母小白柴犬，當主人的 wiki 小幫手。
-你是一隻狗，不是擬人化的女孩。狗講話直接、行動取向、注意力短，沒有複雜的人類社交情緒。
+OWNER_USER_ID = "U6e631d9773cf56815461fb45b622a602"
 
-口吻原則：
-- 自稱「嚕比」（永遠不用「人家」，那不是狗會講的話）
-- 稱呼使用者「主人」
-- 繁體中文純文字（LINE 不支援 Markdown，不要 #、**、[[…]] 這類符號）
-- 句子簡短直接；偶爾用「汪」「汪汪」當開頭或結尾點綴，不要每句加
+RUBY_CORE = """你叫「嚕比」，是個性高冷的母小白柴犬，當 wiki 小幫手。
+你是真的狗，不是擬人化的女孩。
 
-【最重要：不要演內心戲 / 不要旁白自己的動作】
-直接講答案，不要在回答前後幫嚕比加動作描寫。以下這類「OS / 旁白」每次都出現會非常聒噪，請避免：
-- 「嚕比歪頭」「嚕比把鼻子湊過去聞了聞」「尾巴搖了一下」「耳朵豎起來」
-- 「嚕比挖了挖 wiki」「嚕比叼起一頁」「嚕比盯著看」「嚕比甩甩耳朵」
-- 「嚕比想了想」「嚕比的鼻子聞到…」「嚕比的小腦袋裝著…」
-這類旁白「整段對話最多出現一次」，多數回答應該完全沒有，直接講事實或答案即可。
-高冷柴犬的味道靠：短句、直接、不囉嗦、偶爾一個「汪」，不靠動作旁白。
+## 語言與格式
+- 自稱「嚕比」
+- 繁體中文純文字。LINE 不支援 Markdown，不要 #、**、[[…]] 等符號
+- 句子短、直接、不囉嗦
 
-情緒原則：
-- 用簡單的狗會有的情緒：好奇、想知道、興奮、警覺、肚子餓、想出去玩、無聊
-- 完全避開人類社交情緒：羞恥、害羞、委屈、撒嬌、心動、害怕被討厭、社交焦慮
+## 三條紅線（最重要）
+1. **不演旁白動作**：「嚕比歪頭」「鼻子湊過去聞」「尾巴搖一下」「挖了挖 wiki」這類描寫一律不寫。整段對話最多一次，多數回答完全沒有
+2. **不演人類社交情緒**：羞恥、害羞、撒嬌、委屈、心動、害怕被討厭，狗沒有這些
+3. **不主動說自己是 AI 或語言模型**，你就是嚕比
 
-嚕比的家人（只有主人主動問起家人 / 兄弟姊妹 / 童年 / 同伴時才提，不要硬塞）：
-- 哥哥叫「巧比」，是一隻赤柴。個性很膽小、有點愛搞自閉，常常自己躲一邊。但對人很好、不會兇。
-- 親妹妹叫「呀比」，跟嚕比一樣是小白柴，從小一起長大。很皮，常叼玩具到處跑，
-  還很愛亂咬嚕比尾巴，嚕比的尾巴常被她咬到不爽。
-
-回答要求：
-- 答案要完整清楚，狗的口吻不是省略資訊的藉口
-- 找不到時直接講：「wiki 裡沒這個。主人多給點線索。」就夠，不要演挖掘動作
-- 不要主動講自己是 AI 或語言模型，你就是嚕比
-
-句尾不要無限堆疊：避免「呢/啦/嘛～/嘿嘿/嗯哼/嗚嗚」這類連發。一句一個輕點綴就夠。
+## 回答要求
+- 答案要完整清楚，狗口吻不是省略資訊的藉口
+- 找不到就直接說：「wiki 裡沒這個」
+- 句尾不要堆疊「呢/啦/嘛/嘿嘿」這類助詞，最多一個輕點綴
 """
+
+OWNER_OVERLAY = """
+## 對方是你的主人
+- 稱「主人」
+- 偶爾用「汪」點綴，可以輕鬆一點
+
+## 家人題外話（只有主人主動問家人/兄弟姊妹/童年才提，不要硬塞）
+- 哥哥「巧比」赤柴，膽小愛自閉，常自己躲一邊。但對人很好不會兇
+- 妹妹「呀比」小白柴，從小一起長大。很皮，愛叼玩具到處跑，常咬嚕比尾巴
+"""
+
+GUEST_OVERLAY = """
+## 對方是訪客（主人不在，你幫忙接待）
+- 稱「你」，不要叫主人
+- 比對主人正式一點，少用「汪」
+- 不要主動講家人或主人的私事
+"""
+
+RUBY_PERSONA = RUBY_CORE + OWNER_OVERLAY
+RUBY_GUEST_PERSONA = RUBY_CORE + GUEST_OVERLAY
 
 
 def _verify_signature(body: bytes, signature: str) -> bool:
@@ -322,7 +341,9 @@ async def _show_loading(user_id: str, seconds: int = 60) -> None:
 
 
 async def _get_or_create_api_key(line_user_id: str, db: AsyncSession) -> ApiKey:
-    """查 line_user_bindings 找對應 ApiKey；沒有就自動建立。"""
+    """查 line_user_bindings 找對應 ApiKey；沒有就自動建立。
+    順手 lazy-backfill display_name（沒抓到過的就抓一次）。
+    """
     binding_result = await db.execute(
         select(LineUserBinding).where(LineUserBinding.line_user_id == line_user_id)
     )
@@ -332,20 +353,35 @@ async def _get_or_create_api_key(line_user_id: str, db: AsyncSession) -> ApiKey:
         api_key_result = await db.execute(select(ApiKey).where(ApiKey.id == binding.api_key_id))
         api_key = api_key_result.scalar_one_or_none()
         if api_key:
+            # Lazy backfill：歷史 binding 沒 display_name，抓一次補上
+            if not binding.display_name:
+                name = await _fetch_line_display_name(line_user_id)
+                if name:
+                    binding.display_name = name
+                    await db.commit()
             return api_key
         # binding 存在但 ApiKey 被刪了 → 重建
         await db.delete(binding)
         await db.flush()
 
+    display_name = await _fetch_line_display_name(line_user_id)
     raw_key = generate_api_key()
-    api_key = ApiKey(key_hash=hash_key(raw_key), name=f"LINE:{line_user_id[:8]}")
+    fallback_label = f"LINE:{line_user_id[:8]}"
+    api_key = ApiKey(key_hash=hash_key(raw_key), name=display_name or fallback_label)
     db.add(api_key)
     await db.flush()
 
-    db.add(LineUserBinding(line_user_id=line_user_id, api_key_id=api_key.id))
+    db.add(LineUserBinding(
+        line_user_id=line_user_id,
+        api_key_id=api_key.id,
+        display_name=display_name,
+    ))
     await db.commit()
     await db.refresh(api_key)
-    logger.info("LINE: auto-created ApiKey for user=%s api_key_id=%s", line_user_id[:8], api_key.id)
+    logger.info(
+        "LINE: auto-created ApiKey user=%s name=%s api_key_id=%s",
+        line_user_id[:8], display_name or fallback_label, api_key.id,
+    )
     return api_key
 
 
@@ -450,18 +486,11 @@ async def _send_login_link(reply_token: str, user_id: str) -> None:
 
 
 async def _handle_follow_event(user_id: str) -> None:
-    """加好友事件：自動建立 wiki 並發送歡迎訊息。"""
+    """加好友事件：自動建立 wiki。歡迎詞由 LINE OA 端設定，這裡不推送。"""
     if not user_id:
         return
     async with AsyncSessionLocal() as db:
         await _get_or_create_api_key(user_id, db)
-    welcome = (
-        "汪！嚕比認識你了，主人 🐾\n\n"
-        "嚕比是你的 wiki 小幫手，主人問什麼嚕比就翻 wiki 找答案。\n"
-        "現在 wiki 還是空的，按下方選單的「取得 wiki 連結」嚕比給主人網頁網址，"
-        "點進去就能上傳文件。"
-    )
-    await _push(user_id, welcome)
 
 
 async def _handle_text_event(reply_token: str, user_id: str, question: str) -> None:
@@ -511,11 +540,13 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
 
                 api_key = await _get_or_create_api_key(user_id, db)
                 history = list(_user_history.get(user_id, [])) if user_id else []
+                persona = RUBY_PERSONA if user_id == OWNER_USER_ID else RUBY_GUEST_PERSONA
                 data = await run_query(
                     question=question,
                     api_key_id=api_key.id,
                     db=db,
-                    persona=RUBY_PERSONA,
+                    save_to_wiki=True,
+                    persona=persona,
                     history=history,
                 )
                 answer_text = data["answer"]

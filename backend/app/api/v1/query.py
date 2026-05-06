@@ -35,10 +35,26 @@ class PageRef(BaseModel):
     slug: str
 
 
+class WikiEdit(BaseModel):
+    action: Literal["update", "create"]
+    slug: str
+    title: str
+    page_type: str
+    reason: str
+
+
+class WikiSaveInfo(BaseModel):
+    save_decision: bool
+    judge_reason: str
+    applied_edits: list[WikiEdit] = []
+    refine_summary: str = ""
+
+
 class QueryResponse(BaseModel):
     answer: str
     referenced_pages: list[PageRef]
     saved_page: PageRef | None = None
+    wiki_save: WikiSaveInfo | None = None
 
 
 @router.post("/query", response_model=QueryResponse)
