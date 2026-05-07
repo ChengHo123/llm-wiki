@@ -12,6 +12,7 @@ from app.db.base import Base  # noqa: E402
 import app.models.api_key  # noqa: F401, E402
 import app.models.document  # noqa: F401, E402
 import app.models.wiki_page  # noqa: F401, E402
+import app.models.wiki_page_source  # noqa: F401, E402
 import app.models.wiki_link  # noqa: F401, E402
 import app.models.activity_log  # noqa: F401, E402
 import app.models.line_user_binding  # noqa: F401, E402

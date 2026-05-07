@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.models.api_key import ApiKey
 from app.models.document import Document
 from app.models.wiki_page import WikiPage
+from app.models.wiki_page_source import WikiPageSource
 from app.core.security import get_current_key
 from app.core.config import get_settings
 from app.services.ingest_queue import enqueue
@@ -177,7 +178,8 @@ async def delete_document(
     api_key: ApiKey = Depends(get_current_key),
     db: AsyncSession = Depends(get_db),
 ):
-    """刪除文件。delete_pages=true（預設）時，一併刪除由此文件產生的 wiki 頁面。"""
+    """刪除文件。delete_pages=true（預設）時，僅刪除「此文件為唯一 source」的 wiki 頁面；
+    其他文件也貢獻過的頁面會保留下來，僅移除這份文件的 source 連結。"""
     result = await db.execute(
         select(Document).where(
             Document.id == document_id,
@@ -188,18 +190,17 @@ async def delete_document(
     if not doc:
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    pages_deleted = 0
+    candidate_page_ids: list[uuid.UUID] = []
     if delete_pages:
-        pages_result = await db.execute(
-            select(WikiPage).where(
-                WikiPage.source_document_id == document_id,
+        candidates = await db.execute(
+            select(WikiPage.id)
+            .join(WikiPageSource, WikiPage.id == WikiPageSource.wiki_page_id)
+            .where(
+                WikiPageSource.document_id == document_id,
                 WikiPage.api_key_id == api_key.id,
             )
         )
-        pages = pages_result.scalars().all()
-        for page in pages:
-            await db.delete(page)
-        pages_deleted = len(pages)
+        candidate_page_ids = [row[0] for row in candidates.all()]
 
     # 刪除實體檔案
     try:
@@ -207,7 +208,24 @@ async def delete_document(
     except Exception:
         pass
 
+    # 刪文件本身：DB CASCADE 會自動移除 wiki_page_sources 中的對應 row
     await db.delete(doc)
+    await db.flush()
+
+    pages_deleted = 0
+    if delete_pages:
+        for page_id in candidate_page_ids:
+            remaining = await db.scalar(
+                select(func.count())
+                .select_from(WikiPageSource)
+                .where(WikiPageSource.wiki_page_id == page_id)
+            )
+            if remaining == 0:
+                page = await db.get(WikiPage, page_id)
+                if page is not None:
+                    await db.delete(page)
+                    pages_deleted += 1
+
     await db.commit()
 
     return {"deleted_document_id": str(document_id), "pages_deleted": pages_deleted}

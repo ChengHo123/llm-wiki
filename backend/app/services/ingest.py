@@ -6,11 +6,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 
 from app.db.session import AsyncSessionLocal
 from app.models.document import Document
 from app.models.wiki_page import WikiPage
+from app.models.wiki_page_source import WikiPageSource
 from app.models.wiki_link import WikiLink
 from app.models.activity_log import ActivityLog
 from app.services.llm import structured_call, vision_structured_call, build_document_message
@@ -420,6 +421,17 @@ async def _apply_ingest_result(
         slug_to_id[slug] = wiki_page.id
         pages_created.append({"id": str(wiki_page.id), "title": title, "slug": slug})
 
+        # 記錄這份文件是這頁的 source（多對多）；同一 (page, doc) 已存在則跳過
+        existing_link = await db.execute(
+            select(WikiPageSource).where(
+                WikiPageSource.wiki_page_id == wiki_page.id,
+                WikiPageSource.document_id == doc_id,
+            )
+        )
+        if existing_link.scalar_one_or_none() is None:
+            db.add(WikiPageSource(wiki_page_id=wiki_page.id, document_id=doc_id))
+            await db.flush()
+
     slug_to_id_all = {**existing_slugs, **slug_to_id}
 
     for page_data in data.get("pages", []):
@@ -557,13 +569,30 @@ async def run_ingest(document_id: uuid.UUID) -> None:
                     db, doc.id, doc.api_key_id, data,
                 )
 
-            # 成功完成：刪除上次留下、本次沒被 upsert 到的 stale 頁面
-            await db.execute(
-                delete(WikiPage).where(
-                    WikiPage.source_document_id == doc.id,
+            # 成功完成：清理本份文件曾貢獻、但這次沒被 upsert 到的 stale 頁面。
+            # 多對多版本：移除這份文件對該頁的 source 連結；若該頁已無任何 source，才刪頁。
+            stale_pages_result = await db.execute(
+                select(WikiPage)
+                .join(WikiPageSource, WikiPage.id == WikiPageSource.wiki_page_id)
+                .where(
+                    WikiPageSource.document_id == doc.id,
                     WikiPage.updated_at < ingest_start,
                 )
             )
+            for stale_page in stale_pages_result.scalars().all():
+                await db.execute(
+                    delete(WikiPageSource).where(
+                        WikiPageSource.wiki_page_id == stale_page.id,
+                        WikiPageSource.document_id == doc.id,
+                    )
+                )
+                remaining = await db.scalar(
+                    select(func.count())
+                    .select_from(WikiPageSource)
+                    .where(WikiPageSource.wiki_page_id == stale_page.id)
+                )
+                if remaining == 0:
+                    await db.delete(stale_page)
             await db.commit()
 
             # Active back-linking：掃描既有頁，補上應指向新頁的 cross-reference
