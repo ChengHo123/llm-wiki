@@ -319,16 +319,24 @@ async def vision_structured_call(
     )
     raw_text = _strip_think(resp.choices[0].message.content or "")
     obj_str = _extract_json_obj(raw_text)
-    if not obj_str:
-        raise ValueError(f"vision model 無 JSON output. preview: {raw_text[:300]}")
-    try:
-        data = json.loads(obj_str)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"JSON decode failed: {e}. preview: {obj_str[:300]}") from e
-    try:
-        return schema.model_validate(data)
-    except ValidationError as e:
-        raise ValueError(f"Schema validation failed: {e}. data: {str(data)[:300]}") from e
+    if obj_str:
+        try:
+            data = json.loads(obj_str)
+            return schema.model_validate(data)
+        except (json.JSONDecodeError, ValidationError) as e:
+            logger.warning("vision pass2 parse failed: %s", e)
+
+    # Pass 3: vision model 無法產 JSON，用它輸出的純文字交給普通 LLM 結構化
+    if raw_text.strip():
+        logger.warning("vision pass2 no JSON; falling back to text→structured_call")
+        return await structured_call(
+            schema=schema,
+            system=system,
+            user=f"[以下是從圖片中提取的文字內容，請依指示整理成 wiki 頁面]\n\n{raw_text}",
+            max_tokens=max_tokens,
+        )
+
+    raise ValueError(f"vision model 無 JSON output. preview: {raw_text[:300]}")
 
 
 def build_document_message(file_path: str, text_content: str | None = None) -> dict:
