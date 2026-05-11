@@ -497,8 +497,11 @@ async def _build_knowledge_summary(api_key: ApiKey, voice: RubyVoice) -> str:
     if not pages:
         return voice.knowledge_empty_msg
 
-    titles_block = "\n".join(f"- {p.title}" for p in pages)
-    user_msg = f"wiki 共 {len(pages)} 頁。標題列表：\n{titles_block}"
+    def _line(p: WikiPage) -> str:
+        s = (p.summary or "").strip().replace("\n", " ")
+        return f"- {p.title}：{s}" if s else f"- {p.title}"
+    titles_block = "\n".join(_line(p) for p in pages)
+    user_msg = f"wiki 共 {len(pages)} 頁。標題與主題摘要：\n{titles_block}"
 
     try:
         overview = await call_llm(
@@ -631,7 +634,11 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
                     persona=voice.persona,
                     history=history,
                 )
-                answer_text = data["answer"]
+                answer_text = (data.get("answer") or "").strip()
+                if not answer_text:
+                    logger.warning("LINE query produced empty answer; sending error_msg")
+                    await _reply(reply_token, voice.error_msg)
+                    return
                 await _reply(reply_token, answer_text)
                 if user_id:
                     dq = _user_history.setdefault(user_id, deque(maxlen=HISTORY_MAXLEN))

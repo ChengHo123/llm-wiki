@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Users, LogOut, RefreshCw, MessageCircle, FileText, Activity, BarChart3, UserCheck } from 'lucide-react'
-import { adminListUsers, adminLogout, adminBackfillLineNames, type AdminUserSummary } from '../api/client'
+import { Users, LogOut, RefreshCw, MessageCircle, FileText, Activity, BarChart3, UserCheck, BookOpen } from 'lucide-react'
+import { adminListUsers, adminLogout, adminBackfillLineNames, adminBackfillWikiSummaries, type AdminUserSummary } from '../api/client'
 import ThemeToggle from '../components/ThemeToggle'
 
 export default function AdminUsers() {
@@ -57,6 +57,21 @@ export default function AdminUsers() {
     }
   }
 
+  const [backfillingSummaries, setBackfillingSummaries] = useState(false)
+  const handleBackfillSummaries = async () => {
+    if (backfillingSummaries) return
+    if (!confirm('補抓 wiki summary 會逐頁呼叫 LLM，可能花費較久時間且耗 token，是否繼續？')) return
+    setBackfillingSummaries(true)
+    try {
+      const r = await adminBackfillWikiSummaries()
+      alert(`掃描 ${r.scanned} 頁，更新 ${r.updated}，失敗 ${r.failed}`)
+    } catch (e: any) {
+      alert(e.response?.data?.detail || '補抓 summary 失敗')
+    } finally {
+      setBackfillingSummaries(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-6">
       <div className="max-w-6xl mx-auto">
@@ -95,6 +110,18 @@ export default function AdminUsers() {
               title="補抓 LINE 顯示名稱"
             >
               <UserCheck size={15} className={backfilling ? 'animate-pulse' : ''} />
+            </button>
+            <button
+              onClick={handleBackfillSummaries}
+              disabled={backfillingSummaries}
+              className="text-zinc-500 dark:text-zinc-400
+                         hover:text-zinc-900 dark:hover:text-zinc-100
+                         hover:bg-zinc-100 dark:hover:bg-zinc-800
+                         disabled:opacity-50 disabled:cursor-not-allowed
+                         w-8 h-8 rounded-lg inline-flex items-center justify-center transition-colors"
+              title="補抓 wiki page summary（一次性）"
+            >
+              <BookOpen size={15} className={backfillingSummaries ? 'animate-pulse' : ''} />
             </button>
             <button
               onClick={load}

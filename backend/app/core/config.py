@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "/app/uploads"
     MAX_UPLOAD_SIZE_MB: int = 50
     MAX_WIKI_PAGES: int = 100  # 檢索容量上限；達到即拒絕上傳，避免 query 漏頁
+    MAX_QUERY_CONTEXT_PAGES: int = 30  # 單次 query 帶進 prompt 的最大頁數，避免 context window 爆掉
     EST_PAGES_PER_DOC: int = 12  # 預估單份文件 ingest 產出頁數；用於排隊中文件的預留估算
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 

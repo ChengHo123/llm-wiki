@@ -327,6 +327,11 @@ export async function adminBackfillLineNames(): Promise<AdminBackfillResult> {
   return res.data
 }
 
+export async function adminBackfillWikiSummaries(): Promise<AdminBackfillResult> {
+  const res = await adminApi.post('/admin/wiki/backfill-summaries')
+  return res.data
+}
+
 export async function adminOverview(start?: string, end?: string): Promise<AdminOverview> {
   const res = await adminApi.get('/admin/overview', {
     params: { start_date: start, end_date: end },

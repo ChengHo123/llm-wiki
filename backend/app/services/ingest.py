@@ -26,6 +26,10 @@ class IngestPage(BaseModel):
     page_type: Literal["summary", "entity", "concept", "index"] = Field(
         description="summary=文件摘要, entity=人名/組織/產品, concept=概念/技術, index=索引頁"
     )
+    summary: str = Field(
+        default="",
+        description="1-2 句、最多 150 字的本頁主題濃縮，用於 wiki 索引；不可只重述 title",
+    )
     content: str = Field(description="Markdown 格式內容，使用 [[標題]] 標記跨頁連結")
     links_to: list[str] = Field(default_factory=list, description="連結到的其他頁面 slug")
 
@@ -90,6 +94,7 @@ INGEST_SYSTEM_PROMPT = """你是一個知識整理助手，負責將文件內容
       "title": "頁面標題",
       "slug": "page-slug-in-kebab-case",
       "page_type": "summary|entity|concept|index",
+      "summary": "1-2 句、最多 150 字的主題濃縮，供 wiki 索引/路由使用",
       "content": "Markdown 格式的頁面內容，使用 [[頁面標題]] 語法建立內部連結",
       "links_to": ["連結到的其他頁面 slug 列表"]
     }
@@ -102,6 +107,7 @@ INGEST_SYSTEM_PROMPT = """你是一個知識整理助手，負責將文件內容
 - page_type: summary=文件摘要, entity=人名/組織/產品, concept=概念/技術, index=索引頁
 - 使用 [[標題]] 語法在 content 中標記頁面間的交叉連結
 - slug 只使用英文小寫、數字、連字號
+- 每頁必填 summary（1-2 句、最多 150 字），需濃縮主題重點，不可只重述 title
 - content 使用 Markdown 格式，要有實質內容，不要只寫標題
 - `[[標題]]` 只可指向：(a) 本次 pages 列表內的 title，或 (b) <existing_wiki> 區塊內已存在的 slug/title。不准自創不存在的頁面名
 
@@ -404,6 +410,7 @@ async def _apply_ingest_result(
             wiki_page.content = page_data.get("content", "")
             wiki_page.title = title
             wiki_page.page_type = page_data.get("page_type", "concept")
+            wiki_page.summary = page_data.get("summary", "") or wiki_page.summary
             if wiki_page.source_document_id is None:
                 wiki_page.source_document_id = doc_id
         else:
@@ -414,6 +421,7 @@ async def _apply_ingest_result(
                 slug=slug,
                 content=page_data.get("content", ""),
                 page_type=page_data.get("page_type", "concept"),
+                summary=page_data.get("summary", ""),
             )
             db.add(wiki_page)
 

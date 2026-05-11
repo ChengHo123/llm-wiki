@@ -347,12 +347,17 @@ async def select_relevant_pages(
     if max_pages is None:
         max_pages = settings.MAX_WIKI_PAGES
 
-    # 小型 wiki 直接全量帶入
+    # 小型 wiki 直接全量帶入；但仍受 MAX_QUERY_CONTEXT_PAGES 上限保護
     if len(all_pages) <= max_pages:
-        return list(all_pages)
+        context_cap = settings.MAX_QUERY_CONTEXT_PAGES
+        if len(all_pages) <= context_cap:
+            return list(all_pages)
+        # 全量超過 context cap → 退回 LLM 選擇路徑做篩選
 
-    # 送 title + slug + content 摘要（前 300 字）給 LLM
+    # 送 title + slug + 預先計算的 summary 給 LLM；若 summary 空（舊資料未補）退回用 content[:300]
     def _summary(p: WikiPage) -> str:
+        if p.summary and p.summary.strip():
+            return p.summary.strip().replace("\n", " ")[:300]
         return (p.content or "").strip().replace("\n", " ")[:300]
 
     index = "\n".join(
@@ -373,13 +378,19 @@ async def select_relevant_pages(
 
     selected = [p for p in all_pages if p.slug in relevant_slugs]
 
-    # Fallback 1: LLM 沒選任何頁面 → 用關鍵字比對（不限數量，所有 score>0 都帶）
+    # Fallback 1: LLM 沒選任何頁面 → 用關鍵字比對
     if not selected:
         selected = _keyword_match(question, all_pages)
 
     # Fallback 2: 真的零匹配 → 最新 max_pages 頁（沒任何線索時的最後一招）
     if not selected:
         selected = sorted(all_pages, key=lambda p: p.updated_at, reverse=True)[:max_pages]
+
+    # 硬上限：超過 MAX_QUERY_CONTEXT_PAGES 就截斷，避免 prompt 太大爆 context window
+    context_cap = settings.MAX_QUERY_CONTEXT_PAGES
+    if len(selected) > context_cap:
+        # 優先保留 LLM 選中的（順序視同重要性），不夠才用其他 fallback；都不夠就截斷
+        selected = selected[:context_cap]
 
     return selected
 
@@ -423,11 +434,38 @@ async def run_query(
 
     pages = await select_relevant_pages(question, all_pages)
 
-    # 建立 wiki context（供 prompt caching）
-    wiki_context = "\n\n".join(
-        f"<wiki_page title='{p.title}' slug='{p.slug}'>\n{p.content}\n</wiki_page>"
-        for p in pages
-    )
+    # 建立 wiki context — 動態減枝：先試 content，塞不下退用 summary，再不行就截斷。
+    # 字元上限粗估 token budget；模型多為 32K context，留約 8K 給 system+question+answer。
+    MAX_CONTEXT_CHARS = 60000
+    context_parts: list[str] = []
+    remaining = MAX_CONTEXT_CHARS
+    degraded_count = 0
+    for p in pages:
+        full = p.content or ""
+        summary = (p.summary or "").strip()
+        if len(full) <= remaining and full:
+            body = full
+            remaining -= len(full)
+        elif summary and len(summary) <= remaining:
+            body = summary
+            remaining -= len(summary)
+            degraded_count += 1
+        elif remaining > 0:
+            body = full[:remaining] if full else summary[:remaining]
+            remaining = 0
+            degraded_count += 1
+        else:
+            break
+        context_parts.append(
+            f"<wiki_page title='{p.title}' slug='{p.slug}'>\n{body}\n</wiki_page>"
+        )
+    wiki_context = "\n\n".join(context_parts)
+    if degraded_count:
+        import logging
+        logging.getLogger(__name__).info(
+            "wiki_context degraded: %d/%d pages used summary/truncated",
+            degraded_count, len(pages),
+        )
 
     system = f"{QUERY_SYSTEM_PROMPT}\n\n<wiki>\n{wiki_context}\n</wiki>"
     if persona:

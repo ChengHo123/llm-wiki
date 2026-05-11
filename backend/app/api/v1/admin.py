@@ -601,6 +601,64 @@ async def backfill_line_display_names(
     return BackfillResult(scanned=scanned, updated=updated, failed=failed)
 
 
+# ── Wiki summary 補抓 ────────────────────────────────
+
+
+@router.post("/admin/wiki/backfill-summaries", response_model=BackfillResult)
+async def backfill_wiki_summaries(
+    _: None = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """掃所有 summary 為空的 wiki page，用 LLM 從 content 產生 1-2 句摘要寫回。
+    既有資料一次性補齊用，之後 ingest 會直接帶 summary。"""
+    from app.services.llm import call_llm
+
+    pages = (
+        await db.execute(
+            select(WikiPage).where(WikiPage.summary == "")
+        )
+    ).scalars().all()
+
+    scanned = len(pages)
+    updated = 0
+    failed = 0
+
+    sys_prompt = "你是知識整理助手，為 wiki 頁面產生簡潔的主題摘要。只輸出摘要本身，不加前後綴。"
+    for p in pages:
+        content = (p.content or "").strip()
+        if not content:
+            failed += 1
+            continue
+        user_msg = (
+            f"以下是 wiki 頁面內容。請用 1-2 句、最多 150 字濃縮這頁主題重點。\n\n"
+            f"標題：{p.title}\n\n"
+            f"內容：\n{content[:3000]}"
+        )
+        try:
+            text = await call_llm(
+                system=sys_prompt,
+                messages=[{"role": "user", "content": user_msg}],
+                max_tokens=256,
+            )
+        except Exception:
+            logger.exception("backfill summary LLM call failed for page %s", p.id)
+            failed += 1
+            continue
+        text = (text or "").strip()
+        if not text:
+            failed += 1
+            continue
+        p.summary = text[:500]
+        updated += 1
+        if updated % 10 == 0:
+            await db.commit()
+
+    if updated:
+        await db.commit()
+
+    return BackfillResult(scanned=scanned, updated=updated, failed=failed)
+
+
 # ── Document control（admin 跨 user 重試）─────────────
 
 
