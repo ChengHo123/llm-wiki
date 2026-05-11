@@ -283,7 +283,7 @@ export default function QueryPage() {
                   )}
 
                   {msg.content || !msg.streaming ? (
-                    <div className="prose max-w-none text-sm">
+                    <div className="prose dark:prose-invert max-w-none text-sm break-words">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                       {msg.streaming && (
                         <span className="inline-block w-2 h-4 bg-blue-400 animate-pulse ml-0.5 align-middle" />

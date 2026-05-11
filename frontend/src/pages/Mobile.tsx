@@ -340,7 +340,7 @@ function WikiDetailView({
               </span>
             </div>
             <h1 className="text-xl font-bold text-gray-800 dark:text-zinc-100 mb-3 leading-tight">{page.title}</h1>
-            <div className="prose prose-sm max-w-none break-words [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_img]:max-w-full [&_table]:block [&_table]:overflow-x-auto">
+            <div className="prose prose-base dark:prose-invert max-w-none break-words [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_img]:max-w-full [&_table]:block [&_table]:overflow-x-auto">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{

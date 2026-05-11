@@ -109,7 +109,7 @@ export default function WikiPage() {
           </span>
         </div>
         <h1 className="text-2xl font-bold text-gray-800 dark:text-zinc-100 mb-4">{selected.title}</h1>
-        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-700 p-6 prose max-w-none">
+        <div className="bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-700 p-6 prose dark:prose-invert max-w-none break-words">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.content}</ReactMarkdown>
         </div>
         <p className="text-xs text-gray-400 dark:text-zinc-500 mt-3">最後更新：{new Date(selected.updated_at).toLocaleString('zh-TW')}</p>
