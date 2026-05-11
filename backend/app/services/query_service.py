@@ -434,36 +434,41 @@ async def run_query(
 
     pages = await select_relevant_pages(question, all_pages)
 
-    # 建立 wiki context — 動態減枝：先試 content，塞不下退用 summary，再不行就截斷。
+    # 建立 wiki context — 兩階段：先給每頁配 summary（保證每頁都進得去），
+    # 再用剩餘 budget 把能升級的頁面替換成完整 content。
     # 字元上限粗估 token budget；模型多為 32K context，留約 8K 給 system+question+answer。
     MAX_CONTEXT_CHARS = 60000
-    context_parts: list[str] = []
-    remaining = MAX_CONTEXT_CHARS
-    degraded_count = 0
+    # Phase 1: baseline = summary（沒 summary 就用 content 截前 300 字）
+    bodies: list[str] = []
     for p in pages:
-        full = p.content or ""
         summary = (p.summary or "").strip()
-        if len(full) <= remaining and full:
-            body = full
-            remaining -= len(full)
-        elif summary and len(summary) <= remaining:
-            body = summary
-            remaining -= len(summary)
-            degraded_count += 1
-        elif remaining > 0:
-            body = full[:remaining] if full else summary[:remaining]
-            remaining = 0
-            degraded_count += 1
+        if summary:
+            bodies.append(summary)
         else:
-            break
-        context_parts.append(
-            f"<wiki_page title='{p.title}' slug='{p.slug}'>\n{body}\n</wiki_page>"
-        )
+            bodies.append((p.content or "")[:300])
+    used = sum(len(b) for b in bodies)
+    # Phase 2: 用剩餘 budget 把短內容升級為完整 content
+    remaining = MAX_CONTEXT_CHARS - used
+    for i, p in enumerate(pages):
+        full = p.content or ""
+        if not full or full == bodies[i]:
+            continue
+        delta = len(full) - len(bodies[i])
+        if delta <= remaining:
+            bodies[i] = full
+            remaining -= delta
+    degraded_count = sum(
+        1 for i, p in enumerate(pages) if bodies[i] != (p.content or "")
+    )
+    context_parts = [
+        f"<wiki_page title='{p.title}' slug='{p.slug}'>\n{body}\n</wiki_page>"
+        for p, body in zip(pages, bodies)
+    ]
     wiki_context = "\n\n".join(context_parts)
     if degraded_count:
         import logging
         logging.getLogger(__name__).info(
-            "wiki_context degraded: %d/%d pages used summary/truncated",
+            "wiki_context degraded: %d/%d pages used summary instead of full content",
             degraded_count, len(pages),
         )
 
@@ -476,6 +481,14 @@ async def run_query(
         messages=[*history, {"role": "user", "content": question}],
         max_tokens=2048,
     )
+
+    # 防呆：wiki path 拿到空 answer 時退回 chat-only，給使用者一個說法
+    if not answer.strip():
+        import logging
+        logging.getLogger(__name__).warning(
+            "run_query wiki path got empty answer; falling back to chat_only_reply"
+        )
+        answer = await chat_only_reply(question, persona, history)
 
     referenced_pages = [{"id": str(p.id), "title": p.title, "slug": p.slug} for p in pages]
 

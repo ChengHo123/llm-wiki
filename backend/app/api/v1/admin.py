@@ -480,9 +480,20 @@ class AdminDocumentOut(BaseModel):
     created_at: str
 
 
+class AdminWikiPageOut(BaseModel):
+    id: str
+    title: str
+    slug: str
+    page_type: str
+    summary: str
+    has_content: bool
+    updated_at: str
+
+
 class UserDetail(BaseModel):
     summary: UserSummary
     documents: list[AdminDocumentOut]
+    wiki_pages: list[AdminWikiPageOut]
 
 
 @router.get("/admin/users/{api_key_id}", response_model=UserDetail)
@@ -550,6 +561,24 @@ async def user_detail(
                 created_at=d.created_at.isoformat(),
             )
             for d in docs
+        ],
+        wiki_pages=[
+            AdminWikiPageOut(
+                id=str(w.id),
+                title=w.title,
+                slug=w.slug,
+                page_type=w.page_type,
+                summary=w.summary or "",
+                has_content=bool((w.content or "").strip()),
+                updated_at=w.updated_at.isoformat(),
+            )
+            for w in (
+                await db.execute(
+                    select(WikiPage)
+                    .where(WikiPage.api_key_id == api_key_id)
+                    .order_by(WikiPage.updated_at.desc())
+                )
+            ).scalars().all()
         ],
     )
 

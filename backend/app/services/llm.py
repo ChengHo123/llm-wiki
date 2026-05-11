@@ -201,7 +201,16 @@ async def call_llm(
         messages=[{"role": "system", "content": system}, *normalized],
         **_user_kwargs(),
     )
-    return response.choices[0].message.content or ""
+    choice = response.choices[0]
+    content = choice.message.content or ""
+    if not content.strip():
+        finish_reason = getattr(choice, "finish_reason", None)
+        usage = getattr(response, "usage", None)
+        logger.warning(
+            "call_llm returned empty content; model=%s finish_reason=%s usage=%s",
+            settings.LLM_MODEL, finish_reason, usage,
+        )
+    return content
 
 
 async def stream_llm(

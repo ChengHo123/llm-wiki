@@ -245,9 +245,20 @@ export interface AdminUserSummary {
   chat_count: number
 }
 
+export interface AdminWikiPageOut {
+  id: string
+  title: string
+  slug: string
+  page_type: string
+  summary: string
+  has_content: boolean
+  updated_at: string
+}
+
 export interface AdminUserDetail {
   summary: AdminUserSummary
   documents: Document[]
+  wiki_pages: AdminWikiPageOut[]
 }
 
 export interface AdminKpi {

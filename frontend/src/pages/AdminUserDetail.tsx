@@ -182,6 +182,47 @@ export default function AdminUserDetailPage() {
             </div>
           )}
         </section>
+
+        <section className="bg-white dark:bg-zinc-900
+                            rounded-2xl border border-zinc-200 dark:border-zinc-800
+                            shadow-sm shadow-zinc-200/40 dark:shadow-black/20
+                            p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-zinc-900 dark:text-zinc-100">
+              Wiki 頁面（{data.wiki_pages?.length ?? 0}）
+            </h2>
+            <div className="text-xs text-zinc-400 dark:text-zinc-500">
+              {data.wiki_pages
+                ? `已補 summary：${data.wiki_pages.filter((w) => w.summary).length} / ${data.wiki_pages.length}`
+                : ''}
+            </div>
+          </div>
+          {!data.wiki_pages || data.wiki_pages.length === 0 ? (
+            <p className="text-sm text-zinc-400 dark:text-zinc-500">尚無 wiki 頁面</p>
+          ) : (
+            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800 max-h-96 overflow-y-auto">
+              {data.wiki_pages.map((w) => (
+                <li key={w.id} className="py-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200 truncate">
+                      {w.title}
+                    </span>
+                    <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500 px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800">
+                      {w.page_type}
+                    </span>
+                  </div>
+                  <div className="text-xs mt-1">
+                    {w.summary ? (
+                      <span className="text-zinc-600 dark:text-zinc-300">{w.summary}</span>
+                    ) : (
+                      <span className="italic text-amber-600 dark:text-amber-400">尚未產生 summary</span>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
     </div>
   )
