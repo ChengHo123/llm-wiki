@@ -203,6 +203,16 @@ async def call_llm(
     )
     choice = response.choices[0]
     content = choice.message.content or ""
+    # reasoning model（DeepSeek-R1、qwen3 thinking 等）會把答案放在 reasoning_content；
+    # content 空時退用它，避免整段被丟掉。
+    if not content.strip():
+        reasoning = getattr(choice.message, "reasoning_content", None) or ""
+        if reasoning.strip():
+            logger.info(
+                "call_llm content empty but reasoning_content has %d chars; using it",
+                len(reasoning),
+            )
+            content = reasoning
     if not content.strip():
         finish_reason = getattr(choice, "finish_reason", None)
         usage = getattr(response, "usage", None)
