@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import httpx
 import openai
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -485,23 +485,33 @@ async def _get_or_create_api_key(line_user_id: str, db: AsyncSession) -> ApiKey:
 
 
 async def _build_knowledge_summary(api_key: ApiKey, voice: RubyVoice) -> str:
-    """嚕比簡述 wiki 主題大方向（不列具體頁面）。"""
+    """嚕比簡述 wiki 主題大方向（不列具體頁面）。
+    只撈 title / page_type / summary，避免把大欄位 content 全載入造成不必要的記憶體與 prompt 膨脹。
+    頁數超過 KNOWLEDGE_SUMMARY_MAX_PAGES 時抽樣，避免 prompt 爆。
+    """
+    KNOWLEDGE_SUMMARY_MAX_PAGES = 80
     async with AsyncSessionLocal() as db:
-        pages_result = await db.execute(
-            select(WikiPage)
-            .where(WikiPage.api_key_id == api_key.id)
-            .order_by(WikiPage.updated_at.desc())
+        total_count = await db.scalar(
+            select(func.count(WikiPage.id)).where(WikiPage.api_key_id == api_key.id)
         )
-        pages = pages_result.scalars().all()
+        rows = (
+            await db.execute(
+                select(WikiPage.title, WikiPage.page_type, WikiPage.summary)
+                .where(WikiPage.api_key_id == api_key.id)
+                .order_by(WikiPage.updated_at.desc())
+                .limit(KNOWLEDGE_SUMMARY_MAX_PAGES)
+            )
+        ).all()
 
-    if not pages:
+    if total_count == 0:
         return voice.knowledge_empty_msg
 
-    def _line(p: WikiPage) -> str:
-        s = (p.summary or "").strip().replace("\n", " ")
-        return f"- {p.title}：{s}" if s else f"- {p.title}"
-    titles_block = "\n".join(_line(p) for p in pages)
-    user_msg = f"wiki 共 {len(pages)} 頁。標題與主題摘要：\n{titles_block}"
+    def _line(title: str, summary: str | None) -> str:
+        s = (summary or "").strip().replace("\n", " ")
+        return f"- {title}：{s}" if s else f"- {title}"
+    titles_block = "\n".join(_line(t, s) for t, _, s in rows)
+    sampled_note = f"（為控制 prompt 大小，僅取最新 {len(rows)} 頁）" if total_count > len(rows) else ""
+    user_msg = f"wiki 共 {total_count} 頁{sampled_note}。標題與主題摘要：\n{titles_block}"
 
     try:
         overview = await call_llm(
@@ -512,9 +522,9 @@ async def _build_knowledge_summary(api_key: ApiKey, voice: RubyVoice) -> str:
         overview = overview.strip()
     except Exception as e:
         logger.exception("knowledge summary LLM failed: %s", e)
-        return voice.knowledge_failed_template.format(n=len(pages))
+        return voice.knowledge_failed_template.format(n=total_count)
 
-    return f"嚕比 wiki 裡有 {len(pages)} 頁。\n\n{overview}"
+    return f"嚕比 wiki 裡有 {total_count} 頁。\n\n{overview}"
 
 
 async def _handle_postback(reply_token: str, user_id: str, data: str) -> None:

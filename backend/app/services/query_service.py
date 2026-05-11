@@ -42,6 +42,10 @@ class PageEdit(BaseModel):
     page_type: Literal["entity", "concept"] = Field(
         description="entity=人名/組織/產品，concept=概念/技術"
     )
+    summary: str = Field(
+        default="",
+        description="1-2 句、最多 150 字的本頁主題濃縮，用於 wiki 索引；update 時也應更新",
+    )
     content: str = Field(description="完整 Markdown 內容；update 時為整合後新版本（保留原精髓+新資訊）")
     reason: str = Field(description="此編輯動機")
 
@@ -144,6 +148,7 @@ REFINE_SYSTEM_PROMPT = WIKI_SOUL + """
 - page_type 只能是 entity（人/組織/產品）或 concept（概念/技術）
 - **絕對禁止**建立 "Q: xxx"、"query-xxx"、"chat-xxx"、"如何xxx" 這類 Q&A 風格頁面
 - update 時 content 要是**整合後完整新版本**，不是 diff、不是片段
+- 每個 edit 都要產生 1-2 句、最多 150 字的 `summary`，濃縮本頁重點，供 wiki 索引/路由使用
 - 每個 edit 都要給 reason 說明動機，方便事後追蹤
 - 不確定要不要存 → skip。寧可漏存，不可亂建頁
 """
@@ -156,9 +161,10 @@ async def refine_wiki_plan(
 ) -> RefinePlan:
     """用 LLM 產生 refine plan：要 update 哪些既有頁 / create 哪些新頁。"""
     if referenced_pages:
+        bodies = degrade_page_bodies(referenced_pages, max_chars=40000)
         pages_ctx = "\n\n".join(
-            f"<page slug=\"{p.slug}\" type=\"{p.page_type}\" title=\"{p.title}\">\n{p.content}\n</page>"
-            for p in referenced_pages
+            f"<page slug=\"{p.slug}\" type=\"{p.page_type}\" title=\"{p.title}\">\n{body}\n</page>"
+            for p, body in zip(referenced_pages, bodies)
         )
     else:
         pages_ctx = "(無既有相關頁)"
@@ -197,6 +203,8 @@ async def apply_refine_plan(
             page.content = edit.content
             page.title = edit.title
             page.page_type = edit.page_type
+            if edit.summary:
+                page.summary = edit.summary
             page.updated_at = datetime.utcnow()
         else:  # create
             check = await db.execute(
@@ -213,6 +221,7 @@ async def apply_refine_plan(
                 slug=edit.slug,
                 content=edit.content,
                 page_type=edit.page_type,
+                summary=edit.summary or "",
             )
             db.add(page)
         await db.flush()
@@ -248,6 +257,30 @@ async def judge_save_decision(
         return result.save, result.reason
     except Exception as e:
         return False, f"判斷失敗：{e}"
+
+
+def degrade_page_bodies(pages: list[WikiPage], max_chars: int = 60000) -> list[str]:
+    """Two-phase context budget：每頁先配 summary（沒 summary 退 content[:300]），
+    再用剩餘 budget 把能升級的頁面替換成完整 content。
+    回傳和 pages 同長度的 body 字串列表；上層自行包 XML/Markdown。"""
+    bodies: list[str] = []
+    for p in pages:
+        summary = (p.summary or "").strip()
+        if summary:
+            bodies.append(summary)
+        else:
+            bodies.append((p.content or "")[:300])
+    used = sum(len(b) for b in bodies)
+    remaining = max_chars - used
+    for i, p in enumerate(pages):
+        full = p.content or ""
+        if not full or full == bodies[i]:
+            continue
+        delta = len(full) - len(bodies[i])
+        if delta <= remaining:
+            bodies[i] = full
+            remaining -= delta
+    return bodies
 
 
 def _trim_history(
@@ -295,8 +328,13 @@ async def route_query(
             max_tokens=512,
         )
     except Exception as e:
-        # 路由失敗保守一點走 wiki path
-        return RouteDecision(need_wiki=True, reason=f"路由失敗：{e}")
+        # 路由失敗：短訊息（< 20 字）大概率是閒聊，避免硬走 wiki 把 prompt 灌大；
+        # 長訊息保守走 wiki，符合原本「多查不傷」原則。
+        short = len(question.strip()) < 20
+        return RouteDecision(
+            need_wiki=not short,
+            reason=f"路由失敗（{'短訊息→chat-only' if short else '長訊息→保守走 wiki'}）：{e}",
+        )
 
 
 async def chat_only_reply(
@@ -434,41 +472,16 @@ async def run_query(
 
     pages = await select_relevant_pages(question, all_pages)
 
-    # 建立 wiki context — 兩階段：先給每頁配 summary（保證每頁都進得去），
-    # 再用剩餘 budget 把能升級的頁面替換成完整 content。
-    # 字元上限粗估 token budget；模型多為 32K context，留約 8K 給 system+question+answer。
-    MAX_CONTEXT_CHARS = 60000
-    # Phase 1: baseline = summary（沒 summary 就用 content 截前 300 字）
-    bodies: list[str] = []
-    for p in pages:
-        summary = (p.summary or "").strip()
-        if summary:
-            bodies.append(summary)
-        else:
-            bodies.append((p.content or "")[:300])
-    used = sum(len(b) for b in bodies)
-    # Phase 2: 用剩餘 budget 把短內容升級為完整 content
-    remaining = MAX_CONTEXT_CHARS - used
-    for i, p in enumerate(pages):
-        full = p.content or ""
-        if not full or full == bodies[i]:
-            continue
-        delta = len(full) - len(bodies[i])
-        if delta <= remaining:
-            bodies[i] = full
-            remaining -= delta
-    degraded_count = sum(
-        1 for i, p in enumerate(pages) if bodies[i] != (p.content or "")
-    )
-    context_parts = [
+    bodies = degrade_page_bodies(pages, max_chars=60000)
+    wiki_context = "\n\n".join(
         f"<wiki_page title='{p.title}' slug='{p.slug}'>\n{body}\n</wiki_page>"
         for p, body in zip(pages, bodies)
-    ]
-    wiki_context = "\n\n".join(context_parts)
+    )
+    degraded_count = sum(1 for i, p in enumerate(pages) if bodies[i] != (p.content or ""))
     if degraded_count:
         import logging
         logging.getLogger(__name__).info(
-            "wiki_context degraded: %d/%d pages used summary instead of full content",
+            "wiki_context degraded: %d/%d pages used summary",
             degraded_count, len(pages),
         )
 
@@ -585,9 +598,10 @@ async def run_query_stream(
         referenced_pages = [{"id": str(p.id), "title": p.title, "slug": p.slug} for p in pages]
         yield json.dumps({"type": "pages", "pages": referenced_pages}) + "\n"
 
+        bodies = degrade_page_bodies(pages, max_chars=60000)
         wiki_context = "\n\n".join(
-            f"<wiki_page title='{p.title}' slug='{p.slug}'>\n{p.content}\n</wiki_page>"
-            for p in pages
+            f"<wiki_page title='{p.title}' slug='{p.slug}'>\n{body}\n</wiki_page>"
+            for p, body in zip(pages, bodies)
         )
         system = f"{QUERY_SYSTEM_PROMPT}\n\n<wiki>\n{wiki_context}\n</wiki>"
 

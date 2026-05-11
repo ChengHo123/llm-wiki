@@ -86,30 +86,65 @@ async def run_lint(api_key_id: uuid.UUID, db: AsyncSession) -> dict:
 
     # 建立 wiki 快照：每頁附真實長度，避免 LLM 因 "..." 誤判 incomplete
     SNIPPET_LEN = 2000
-    pages_summary = "\n\n".join(
-        f"<page slug='{p.slug}' type='{p.page_type}' orphan='{p.id in orphan_ids}' "
-        f"full_length='{len(p.content)}'>\n"
-        f"Title: {p.title}\n\n"
-        f"{p.content[:SNIPPET_LEN]}{'...（顯示截斷，實際長度見 full_length）' if len(p.content) > SNIPPET_LEN else ''}"
-        f"\n</page>"
-        for p in pages[:30]
-    )
+    BATCH_SIZE = 30
 
-    raw = await call_llm(
-        system=LINT_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": f"請分析以下 wiki 頁面：\n\n{pages_summary}"}],
-        max_tokens=8192,
-    )
+    def _page_block(p) -> str:
+        suffix = "...（顯示截斷，實際長度見 full_length）" if len(p.content) > SNIPPET_LEN else ""
+        return (
+            f"<page slug='{p.slug}' type='{p.page_type}' orphan='{p.id in orphan_ids}' "
+            f"full_length='{len(p.content)}'>\n"
+            f"Title: {p.title}\n\n"
+            f"{p.content[:SNIPPET_LEN]}{suffix}\n</page>"
+        )
 
-    json_match = re.search(r"```json\s*([\s\S]+?)\s*```", raw)
-    json_str = json_match.group(1) if json_match else raw
-    report = json.loads(json_str)
+    all_issues: list[dict] = []
+    summary_parts: list[str] = []
+    parse_failures = 0
+    for batch_idx in range(0, len(pages), BATCH_SIZE):
+        batch = pages[batch_idx : batch_idx + BATCH_SIZE]
+        pages_summary = "\n\n".join(_page_block(p) for p in batch)
+        try:
+            raw = await call_llm(
+                system=LINT_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": f"請分析以下 wiki 頁面：\n\n{pages_summary}"}],
+                max_tokens=8192,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception(
+                "lint LLM call failed on batch %d: %s", batch_idx, e
+            )
+            parse_failures += 1
+            continue
 
-    # 補充真實統計
-    report.setdefault("stats", {})
-    report["stats"]["total_pages"] = len(pages)
-    report["stats"]["orphan_pages"] = len(orphan_ids)
-    report["stats"]["issues_found"] = len(report.get("issues", []))
+        json_match = re.search(r"```json\s*([\s\S]+?)\s*```", raw)
+        json_str = json_match.group(1) if json_match else raw
+        try:
+            batch_report = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "lint JSON parse failed on batch %d: %s; raw preview: %s",
+                batch_idx, e, raw[:300],
+            )
+            parse_failures += 1
+            continue
+
+        all_issues.extend(batch_report.get("issues", []) or [])
+        if batch_report.get("summary"):
+            summary_parts.append(str(batch_report["summary"]))
+
+    report = {
+        "issues": all_issues,
+        "summary": "\n\n".join(summary_parts) if summary_parts else "（無摘要）",
+        "stats": {
+            "total_pages": len(pages),
+            "orphan_pages": len(orphan_ids),
+            "issues_found": len(all_issues),
+            "batches": (len(pages) + BATCH_SIZE - 1) // BATCH_SIZE,
+            "batch_parse_failures": parse_failures,
+        },
+    }
 
     db.add(ActivityLog(
         api_key_id=api_key_id,
@@ -186,6 +221,9 @@ async def apply_lint_fixes(
             continue
 
         page.content = new_content
+        # content 改了 → summary 失效；清空讓 backfill 路徑或下次 ingest 重產
+        # （避免在 lint 流程裡多花一次 LLM 呼叫去同步 summary）
+        page.summary = ""
         applied.append({
             "page_slug": slug,
             "page_id": str(page.id),

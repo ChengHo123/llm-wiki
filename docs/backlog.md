@@ -4,87 +4,151 @@
 
 ---
 
-## P1 — 核心缺口
+## P0 — Context Budget / 工程缺陷（2026-05-11 健檢）
 
-### 1. 跨文件主動回寫（Active Back-linking）
+線上已發生「LLM 回空 / context window 爆掉」事故。根因是多個路徑沒做 context budget 管控；
+`run_query` 已做 two-phase 減枝，其他三條路徑同樣高風險。
 
-**現況：** 新文件 ingest 只產出自己的頁面，靠同 slug upsert 合併。舊頁面不會被回頭修改加新連結。
+### A. `run_query_stream` 沒做 context 減枝 🔴
 
-**目標：** ingest 完成後，LLM 掃描「本次新產頁面」vs「既有 wiki 全頁清單」，找出應補 cross-reference 的舊頁，批次 upsert 更新 `links_to`。
+**位置：** `backend/app/services/query_service.py` ~line 588-591
 
-**設計重點：**
-- 僅在 ingest 成功後觸發，作為 post-ingest pass
-- 掃描範圍：同 api_key_id 的全部既有頁面（不限數量，正確性優先）
-- LLM 輸出：`{ slug: string, add_links_to: string[] }[]`（只補連結，不改內容）
+**現況：** streaming 版本將所有 `pages` 的 `p.content` 全塞進 `wiki_context`，無 budget cap。
 
-**Karpathy 原文：** 「automatically updates 10-15 related wiki pages」— 這是原版核心，目前未實作。
+**修法：** 套用跟 `run_query` 相同的 two-phase 減枝邏輯（先全頁配 summary，再用剩餘 budget 升級為 full content）；可抽出共用 helper `build_wiki_context(pages, max_chars=60000)`。
 
 ---
 
-### 2. LINE 對話 → Wiki（Chat-to-Wiki）
+### B. `refine_wiki_plan` 沒做 context 減枝 🔴
 
-**現況：** `run_query` 有 `save_to_wiki` 參數，LINE bot 呼叫時未傳（預設 False）。
+**位置：** `backend/app/services/query_service.py` ~line 159-176
 
-**目標：** LINE bot 根據 `route_query` 結果 + wiki 管理員 LLM 自評，決定是否存回 wiki：
-- `need_wiki=False`（閒聊）→ 直接丟棄，不需進入評估
-- `need_wiki=True` → 交給「wiki 管理員」評估品質與增量價值
+**現況：** `pages_ctx` 把 referenced_pages full content 全塞，且 `max_tokens=16384` 留給回應。先前 prod 出現的 `ContextWindowExceededError`（25827 messages + 16384 completion = 42211）就是這條。
 
-#### Wiki 管理員設計
+**修法：** 同 A，套用 budget 減枝；或降低 max_tokens 上限。
 
-wiki 管理員是獨立的 LLM 呼叫，在回答完成後非同步執行。它必須內建 wiki 的核心理念，避免錯誤內容破壞知識庫方向。
+---
 
-**管理員的 wiki 靈魂 system prompt 要包含：**
-- wiki 是「蒸餾後的結構化知識」，不是對話存檔
-- 每頁有明確 entity/concept，互相交叉連結，追求知識複利累積
-- 來源是使用者主動餵入的文件；聊天只能「補充」，不能「主導」wiki 方向
-- 管理員的職責是守門，不是照單全收
+### C. `back_link_pass` 沒做 context 減枝 🔴
 
-**值得存回的三種情況（任一滿足）：**
-1. 答案揭露既有頁面之間的**新連結**（A 和 B 原本沒有 cross-reference，但答案說明了關係）
-2. 答案對某個既有頁面有**實質補充**（新 context / 細節 / 修正，且與原頁不重複）
-3. 答案合成出一個**還沒有獨立頁面的新概念**，且概念足夠獨立、普適
+**位置：** `backend/app/services/ingest.py` ~line 212-230
 
-**硬性拒絕條件（任一命中即拒）：**
-- 答案只是重述現有 wiki 頁面內容，無增量價值
-- 低信心 / 模糊推測（「可能是...」「不太確定...」）
-- 問題屬個人事務 / 閒聊 / 不屬知識庫主題
-- 答案與 wiki 的既有知識方向相悖（可能是錯誤資訊）
+**現況：** new + old pages 全部 full content + `max_tokens=32768`。大 wiki ingest 必爆。
 
-**管理員輸出結構：**
+**修法：** 對 `new_pages` 和 `old_pages` 套用 budget 減枝；或限制 `old_pages` 取最近 N 頁。
 
-```python
-class WikiSaveDecision(BaseModel):
-    worth_saving: bool
-    reason: str                          # 給 log 用，不顯示給使用者
-    save_type: Literal["new_page", "supplement", "new_links"] | None
-    target_slug: str | None              # supplement / new_links 時指向既有頁面
-    new_content: str | None             # 合成後的 wiki 格式內容（非原始問答）
-    add_links: list[str]                 # 應補的跨頁連結 slug
-```
+---
 
-**存回格式：**
-- 頁面類型：`query`（新頁）或直接 upsert 既有頁（supplement）
-- 內容：管理員合成的 wiki 格式，不是原始問答文字
-- Slug：`query/{timestamp}-{hash}`（新頁時）
+### D. `apply_refine_plan` 新建頁面未初始化新欄位 🔴
+
+**位置：** `backend/app/services/query_service.py` `apply_refine_plan`
+
+**現況：** create 分支建立 `WikiPage` 時：
+- 沒帶 `summary`（永遠空字串）
+- 沒登記 `wiki_page_sources`（M2M 表沒記錄；雖然 chat 沒 source doc，但邏輯上應該明確標記）
+- 沒設 `source_document_id`
+
+**修法：**
+- 讓 `RefinePlan.PageEdit` 增加 `summary` 欄位，prompt 要求 LLM 一併產生
+- create 時把 `summary` 寫入 page 欄位
+- chat 來源的頁面在 wiki_page_sources 用 NULL document_id 或新增 origin 標記
+
+---
+
+### E. `apply_lint_fixes` / `back_link_pass` 改寫 content 後 summary 不同步 🟡
+
+**位置：** `backend/app/services/lint.py` `apply_lint_fixes`、`backend/app/services/ingest.py` `back_link_pass`
+
+**現況：** 兩處都會改 `page.content`，但 `page.summary` 維持舊版本，造成索引/路由判斷依據過時。
+
+**修法（擇一）：**
+1. **同步重產：** 改 content 時順便讓 LLM 產生新 summary（多一次呼叫，貴）
+2. **延遲標記：** 加欄位 `summary_stale: bool`，後台 backfill 補
+3. **簡單比例規則：** content 字數變化 > 30% 才重產
+
+---
+
+### F. `route_query` 失敗 fallback 應該走 chat-only 🟡
+
+**位置：** `backend/app/services/query_service.py` ~line 297-299
+
+**現況：** 路由 LLM 失敗 → `need_wiki=True`（保守 fallback），導致純閒聊也走 180 頁 wiki path。
+線上「嚕比在嗎」就是被這條坑到。
+
+**修法：** route 失敗時若 question 字數 < N（例如 20）→ 走 chat-only；長 question 才保守走 wiki。
+或者加 regex 預過濾常見閒聊詞（「在嗎」「你好」「嚕比呢」）。
+
+---
+
+### G. `run_lint` 只看前 30 頁、JSON 解析無防呆 🟡
+
+**位置：** `backend/app/services/lint.py` ~line 95、104-106
+
+**現況：**
+- `pages[:30]` 大 wiki 漏看 70%+
+- `json.loads(json_str)` 沒 try/except，LLM 回非 JSON 直接 raise 500
+
+**修法：**
+- 改為分批掃描（每批 30 頁）並彙總
+- JSON parse 失敗時走 fallback / 記 log
+
+---
+
+### H. `build_existing_wiki_context` 沒用新的 summary 欄位 🟡
+
+**位置：** `backend/app/services/ingest.py` ~line 251-260
+
+**現況：** 仍用 `content[:120]` 當摘要。新加的 `summary` 欄位閒置。
+
+**修法：** 改為 `summary if summary else content[:120]`，跟其他路徑一致。
+
+---
+
+### I. ActivityLog `details` 沒有 schema 文件 🟢
+
+**現況：** 各 action 的 details 結構各異：
+- `chat`: `{}`
+- `query`: `{pages_referenced, save_decision, edits_applied}`
+- `ingest`: `{chunked, summary, filename, document_id, pages_created, back_link_edits}`
+- `lint`: `{total_pages, issues_found}`
+- `lint_apply`: `{requested, applied_pages, skipped}`
+
+**修法：** `docs/` 增加 `activity-log-schema.md`，或改用 Pydantic discriminated union 落 schema。
+
+---
+
+### J. WikiPage 刪除沒記 ActivityLog 🟢
+
+**現況：** 文件刪 / wiki page 手動刪都沒留審計痕跡。
+
+**修法：** `documents.py` 刪除路徑、`wiki.py` 刪頁路徑各加一筆 ActivityLog。
+
+---
+
+## P1 — 既有 backlog（部分已完成）
+
+### 1. 跨文件主動回寫（Active Back-linking） ✅ 已實作
+
+`backend/app/services/ingest.py` `back_link_pass` 已在 ingest 完成後執行。
+但 context budget 缺管控（見 P0-C）。
+
+---
+
+### 2. LINE 對話 → Wiki（Chat-to-Wiki） ✅ 已實作
+
+`run_query(save_to_wiki=True)` + `judge_save_decision` + `refine_wiki_plan` + `apply_refine_plan`。
+但 create 路徑未初始化 summary / source 關聯（見 P0-D）。
+
+---
+
+### 3. LINE 路由優化（route_query 過濾冗贅） ✅ 已實作
+
+`route_query` 在 `run_query` 開頭執行。`need_wiki=False` 直接走 `chat_only_reply`。
+但失敗 fallback 對短訊息不友善（見 P0-F）。
 
 ---
 
 ## P2 — 品質提升
-
-### 3. LINE 路由優化（route_query 過濾冗贅）
-
-**現況：** 所有 LINE 訊息都走完整 `run_query`（含 wiki 搜尋），即使是純閒聊也一樣。
-
-**目標：** `route_query` 回傳 `need_wiki=False` 時，直接走 `chat_only_reply`，跳過 wiki 搜尋。
-
-**效益：**
-- 省 token（不搜 wiki）
-- 省時間（少一次 embedding 搜尋）
-- 自然成為 Chat-to-Wiki 的篩選閘門（只有 wiki 相關對話才考慮存回）
-
-**實作位置：** `linebot.py` `run_query` 呼叫處，改為先 `route_query` 再分支。
-
----
 
 ### 4. Lint 自動排程
 
@@ -92,11 +156,11 @@ class WikiSaveDecision(BaseModel):
 
 **目標：** 定期自動執行，偵測並標記問題。
 
-**兩層設計（社群共識）：**
-1. **Programmatic 層**（秒級）：死連結、孤立頁、格式違規 — 純 DB/regex 掃描，不需 LLM
-2. **LLM 層**（分鐘級）：語意矛盾、過期聲明、缺少交叉引用 — 按 api_key_id 逐批執行
+**兩層設計：**
+1. **Programmatic 層**（秒級）：死連結、孤立頁、格式違規 — 純 DB/regex 掃描
+2. **LLM 層**（分鐘級）：語意矛盾、過期聲明、缺少交叉引用
 
-**觸發方式：** 後端 background task（每日一次）或 admin 手動觸發（現有）+ 排程
+**觸發方式：** 後端 background task（每日）或現有 admin 手動觸發 + cron。
 
 ---
 
@@ -104,24 +168,13 @@ class WikiSaveDecision(BaseModel):
 
 ### 5. Lint + Web Search（補缺口驗證）
 
-**現況：** Lint 只做靜態分析。
-
-**目標：** Lint 掃到「過期聲明」時，可選擇性 web search 驗證。
-
-**Karpathy 原文：** Lint 時 web search 是 optional，用來「fill data gaps」。
+Lint 掃到「過期聲明」時，可選擇性 web search 驗證。Karpathy 原文 optional 功能。
 
 ---
 
 ### 6. Typed Relationships（語意關係連結）
 
-**現況：** wiki 頁面之間只有純 `[[wikilink]]`。
-
-**目標：** 加帶語意的關係類型，例如：
-- `depends-on`、`supersedes`、`implements`、`owned-by`
-
-**社群 v2 建議：** 500+ 頁後純 wikilink 難以維護；typed links 提升圖譜可用性。
-
-**目前規模不急，列為追蹤。**
+純 `[[wikilink]]` → 加語意關係（`depends-on`、`supersedes` 等）。500+ 頁規模才需要。
 
 ---
 
@@ -129,12 +182,15 @@ class WikiSaveDecision(BaseModel):
 
 | 順序 | 項目 | 理由 |
 |------|------|------|
-| 1 | #3 LINE 路由優化 | 改動小（linebot.py 一處），立即省 token |
-| 2 | #2 Chat-to-Wiki | 依賴 #3 的路由結果，一起做最省事 |
-| 3 | #1 跨文件主動回寫 | 核心缺口，需設計 post-ingest LLM pass |
-| 4 | #4 Lint 排程 | 需 background scheduler 機制 |
-| 5 | #5 Lint + Web Search | 依賴 #4 完成後擴充 |
-| 6 | #6 Typed Relationships | 規模未到，暫緩 |
+| 1 | **P0-B refine 減枝** | 線上已爆 CW |
+| 2 | **P0-C back_link 減枝** | 線上會在 ingest 期間爆 |
+| 3 | **P0-A run_query_stream 減枝** | web 端 streaming 用，同 budget 風險 |
+| 4 | **P0-D apply_refine_plan 補欄位** | summary backfill 補不到 chat 來源頁 |
+| 5 | **P0-F route fallback 修正** | 短閒聊走 wiki 浪費 token + 觸發其他 bug |
+| 6 | **P0-E summary 同步** | 索引品質劣化 |
+| 7 | P0-G/H/I/J | clean-up |
+| 8 | P2 Lint 排程 | 需 scheduler |
+| 9 | P3 進階 | 規模未到 |
 
 ---
 

@@ -39,6 +39,10 @@ class BackLinkEdit(BaseModel):
     new_content: str = Field(
         description="整合連結後的完整新內容（保留原頁精髓 + 自然嵌入 [[新頁標題]]）"
     )
+    new_summary: str = Field(
+        default="",
+        description="改寫後的 1-2 句、最多 150 字主題摘要；應反映新增的關聯",
+    )
     reason: str = Field(description="為何補這個連結")
 
 
@@ -181,6 +185,7 @@ BACK_LINK_SYSTEM_PROMPT = """你是個人 wiki 的策展人。剛有一批新頁
 - 不要重寫整個頁面、不要改變主題、不要刪除原資訊
 - 不要連結語意不相關的頁面（寧缺勿濫）
 - target_slug 必須是 <existing_pages> 中的 slug，不准自創
+- 每個 update 都要產生 `new_summary`（1-2 句、最多 150 字），反映加入新關聯後的主題摘要
 - 若沒有舊頁適合補連結，updates 回傳空列表
 
 ## 輸入
@@ -209,13 +214,18 @@ async def back_link_pass(
     if not new_pages or not old_pages:
         return []
 
+    # 套用 two-phase context budget，避免大 wiki 把 prompt 爆掉
+    from app.services.query_service import degrade_page_bodies
+
+    new_bodies = degrade_page_bodies(new_pages, max_chars=20000)
+    old_bodies = degrade_page_bodies(old_pages, max_chars=40000)
     new_ctx = "\n\n".join(
-        f"<page slug=\"{p.slug}\" title=\"{p.title}\" type=\"{p.page_type}\">\n{p.content}\n</page>"
-        for p in new_pages
+        f"<page slug=\"{p.slug}\" title=\"{p.title}\" type=\"{p.page_type}\">\n{body}\n</page>"
+        for p, body in zip(new_pages, new_bodies)
     )
     old_ctx = "\n\n".join(
-        f"<page slug=\"{p.slug}\" title=\"{p.title}\" type=\"{p.page_type}\">\n{p.content}\n</page>"
-        for p in old_pages
+        f"<page slug=\"{p.slug}\" title=\"{p.title}\" type=\"{p.page_type}\">\n{body}\n</page>"
+        for p, body in zip(old_pages, old_bodies)
     )
     user_msg = (
         f"<new_pages>\n{new_ctx}\n</new_pages>\n\n"
@@ -236,6 +246,8 @@ async def back_link_pass(
         if not page:
             continue  # LLM 幻覺了不存在的 slug
         page.content = upd.new_content
+        if upd.new_summary:
+            page.summary = upd.new_summary
         page.updated_at = datetime.utcnow()
         await db.flush()
         applied.append({
@@ -249,13 +261,17 @@ async def back_link_pass(
 
 
 def build_existing_wiki_context(pages: list) -> str:
-    """把現有 wiki 頁面整理成 index context 供 LLM 參考"""
+    """把現有 wiki 頁面整理成 index context 供 LLM 參考。優先用 wiki_page.summary，沒有才退用 content。"""
     if not pages:
         return ""
     lines = ["<existing_wiki>"]
     for p in pages:
-        summary = (p.content or "").strip().replace("\n", " ")[:120]
-        lines.append(f"- slug: {p.slug} | title: {p.title} | type: {p.page_type} | summary: {summary}")
+        s = (p.summary or "").strip()
+        if not s:
+            s = (p.content or "").strip().replace("\n", " ")[:120]
+        else:
+            s = s.replace("\n", " ")[:200]
+        lines.append(f"- slug: {p.slug} | title: {p.title} | type: {p.page_type} | summary: {s}")
     lines.append("</existing_wiki>")
     return "\n".join(lines)
 

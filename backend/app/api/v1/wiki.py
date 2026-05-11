@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.models.api_key import ApiKey
 from app.models.wiki_page import WikiPage
 from app.models.wiki_link import WikiLink
+from app.models.activity_log import ActivityLog
 from app.core.security import get_current_key
 from app.services.lint import run_lint, apply_lint_fixes
 
@@ -139,7 +140,18 @@ async def delete_wiki_page(
     if not page:
         raise HTTPException(status_code=404, detail="頁面不存在")
 
+    deleted_meta = {
+        "page_id": str(page.id),
+        "slug": page.slug,
+        "title": page.title,
+        "page_type": page.page_type,
+    }
     await db.delete(page)
+    db.add(ActivityLog(
+        api_key_id=api_key.id,
+        action="wiki_page_delete",
+        details=deleted_meta,
+    ))
     await db.commit()
     return {"deleted_page_id": str(page_id)}
 

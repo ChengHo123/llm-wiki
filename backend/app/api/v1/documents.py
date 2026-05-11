@@ -13,6 +13,7 @@ from app.models.api_key import ApiKey
 from app.models.document import Document
 from app.models.wiki_page import WikiPage
 from app.models.wiki_page_source import WikiPageSource
+from app.models.activity_log import ActivityLog
 from app.core.security import get_current_key
 from app.core.config import get_settings
 from app.services.ingest_queue import enqueue
@@ -226,6 +227,16 @@ async def delete_document(
                     await db.delete(page)
                     pages_deleted += 1
 
+    db.add(ActivityLog(
+        api_key_id=api_key.id,
+        action="document_delete",
+        details={
+            "document_id": str(document_id),
+            "filename": doc.filename,
+            "pages_deleted": pages_deleted,
+            "delete_pages_flag": delete_pages,
+        },
+    ))
     await db.commit()
 
     return {"deleted_document_id": str(document_id), "pages_deleted": pages_deleted}
