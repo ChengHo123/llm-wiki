@@ -20,7 +20,6 @@ class HistoryMessage(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str
-    save_to_wiki: bool = False  # 僅非串流端點使用
     history: list[HistoryMessage] = []
 
 
@@ -63,12 +62,12 @@ async def query_wiki(
     api_key: ApiKey = Depends(get_current_key),
     db: AsyncSession = Depends(get_db),
 ):
-    """向個人 wiki 提問，可選擇將回答存回 wiki"""
+    """向個人 wiki 提問（非串流）。是否存回 wiki 由系統 judge 決定，前端串流端點才會走 refine 流程。"""
     result = await run_query(
         question=body.question,
         api_key_id=api_key.id,
         db=db,
-        save_to_wiki=body.save_to_wiki,
+        save_to_wiki=False,
         history=[h.model_dump() for h in body.history],
     )
     return QueryResponse(**result)

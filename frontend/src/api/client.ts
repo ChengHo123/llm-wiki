@@ -194,22 +194,13 @@ export async function applyLintFixes(issues: LintIssue[]): Promise<LintApplyResu
 }
 
 // ── Query ───────────────────────────────────────────────
-export interface QueryResult {
-  answer: string
-  referenced_pages: { id: string; title: string; slug: string }[]
-  saved_page: { id: string; title: string; slug: string } | null
-}
-
-export async function queryWiki(question: string, saveToWiki: boolean): Promise<QueryResult> {
-  const res = await api.post('/query', { question, save_to_wiki: saveToWiki })
-  return res.data
-}
+// 非串流 /query 端點仍存在但前端只用串流；類型保留供將來複用，目前無 client function。
 
 export interface RefineEdit {
   action: 'update' | 'create'
   slug: string
   title: string
-  page_type: 'entity' | 'concept'
+  page_type: 'entity' | 'concept' | 'index'
   reason: string
 }
 

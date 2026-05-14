@@ -81,8 +81,12 @@ export default function GraphPage() {
 
   const nodeCanvasObject = useCallback((node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const label = node.title
-    const fontSize = Math.max(10, 13 / globalScale)
-    const r = Math.max(6, 10 / Math.sqrt(globalScale))
+    const isIndex = node.page_type === 'index'
+    // index 頁是 query 路由的樞紐，畫得明顯大、文字也大
+    const baseR = isIndex ? 16 : 10
+    const baseFont = isIndex ? 15 : 13
+    const fontSize = Math.max(isIndex ? 12 : 10, baseFont / globalScale)
+    const r = Math.max(isIndex ? 10 : 6, baseR / Math.sqrt(globalScale))
     const color = PAGE_TYPE_COLOR[node.page_type] || '#6b7280'
     const isHovered = hoveredNode?.id === node.id
 
@@ -92,25 +96,23 @@ export default function GraphPage() {
     ctx.fillStyle = color
     ctx.fill()
 
-    // 外框
+    // 外框：index 頁加粗強調樞紐地位
     ctx.beginPath()
     ctx.arc(node.x!, node.y!, r + (isHovered ? 3 : 0), 0, 2 * Math.PI)
-    ctx.strokeStyle = isHovered ? '#fff' : 'rgba(255,255,255,0.5)'
-    ctx.lineWidth = isHovered ? 2.5 / globalScale : 1.5 / globalScale
+    ctx.strokeStyle = isHovered ? '#fff' : isIndex ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)'
+    ctx.lineWidth = (isHovered ? 2.5 : isIndex ? 2.5 : 1.5) / globalScale
     ctx.stroke()
 
-    // 標籤（scale 夠大才顯示）
-    if (globalScale > 0.6) {
-      ctx.font = `${fontSize}px sans-serif`
+    // 標籤（scale 夠大才顯示；index 永遠顯示）
+    if (globalScale > 0.6 || isIndex) {
+      ctx.font = `${isIndex ? 'bold ' : ''}${fontSize}px sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
-      ctx.fillStyle = isHovered ? '#1f2937' : '#374151'
       const textY = node.y! + r + 3 / globalScale
-      // 文字背景
       const textWidth = ctx.measureText(label).width
       ctx.fillStyle = 'rgba(255,255,255,0.85)'
       ctx.fillRect(node.x! - textWidth / 2 - 2, textY - 1, textWidth + 4, fontSize + 2)
-      ctx.fillStyle = isHovered ? '#1d4ed8' : '#374151'
+      ctx.fillStyle = isHovered ? '#1d4ed8' : isIndex ? '#6b21a8' : '#374151'
       ctx.fillText(label, node.x!, textY)
     }
   }, [hoveredNode])
@@ -151,8 +153,20 @@ export default function GraphPage() {
           <div className="flex flex-col gap-1">
             {Object.entries(PAGE_TYPE_COLOR).map(([type, color]) => (
               <div key={type} className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-                <span className="text-xs text-gray-600">{PAGE_TYPE_LABEL[type] || type}</span>
+                <span
+                  className="rounded-full flex-shrink-0"
+                  style={{
+                    backgroundColor: color,
+                    width: type === 'index' ? '14px' : '10px',
+                    height: type === 'index' ? '14px' : '10px',
+                    border: type === 'index' ? '1.5px solid #fff' : 'none',
+                    boxShadow: type === 'index' ? '0 0 0 1px rgba(0,0,0,0.1)' : 'none',
+                  }}
+                />
+                <span className="text-xs text-gray-600">
+                  {PAGE_TYPE_LABEL[type] || type}
+                  {type === 'index' && <span className="text-gray-400"> · 路由樞紐</span>}
+                </span>
               </div>
             ))}
           </div>

@@ -695,6 +695,7 @@ class WikiFixResult(BaseModel):
     pages_scanned: int
     content_rewritten: int
     links_added: int
+    indexes_synthesized: int = 0
 
 
 @router.post("/admin/wiki/fix-existing", response_model=WikiFixResult)
@@ -702,11 +703,16 @@ async def fix_existing_wiki(
     _: None = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """對既有 wiki 頁面套 v0.4.10 引入的修正：
+    """對既有 wiki 頁面套修正：
     1. normalize_markdown 拆出擠成一段的 ## / * / 1. 等區塊
     2. infer_intra_doc_links 掃同文件內互相提及，自動補 wiki_links
+    3. 對每份貢獻 ≥3 頁的文件 upsert 一個 doc-level index 頁，讓 query 路徑 A 對舊資料生效
     """
-    from app.services.ingest import normalize_markdown, infer_intra_doc_links
+    from app.services.ingest import (
+        normalize_markdown,
+        infer_intra_doc_links,
+        synthesize_doc_index_page,
+    )
     from app.models.wiki_link import WikiLink
 
     pages = (
@@ -763,12 +769,33 @@ async def fix_existing_wiki(
                 existing_pairs.add((src_id, tgt_id))
                 links_added += 1
 
+    # 為每份貢獻 ≥3 頁的文件 upsert 一個 doc-level index 頁。
+    # synthesize 是 deterministic、不呼叫 LLM；對既有 wiki 補齊新加的 path A 路由能力。
+    indexes_synthesized = 0
+    for (api_key_id, doc_id), group in groups.items():
+        if len(group) < 3:
+            continue
+        doc = await db.get(Document, doc_id)
+        if doc is None or doc.api_key_id != api_key_id:
+            continue
+        page_dicts = [
+            {"id": str(p.id), "title": p.title, "slug": p.slug}
+            for p in group
+        ]
+        try:
+            result = await synthesize_doc_index_page(db, doc, page_dicts, "")
+            if result:
+                indexes_synthesized += 1
+        except Exception:
+            logger.exception("synthesize_doc_index_page failed for doc %s", doc_id)
+
     await db.commit()
 
     return WikiFixResult(
         pages_scanned=len(pages),
         content_rewritten=content_rewritten,
         links_added=links_added,
+        indexes_synthesized=indexes_synthesized,
     )
 
 

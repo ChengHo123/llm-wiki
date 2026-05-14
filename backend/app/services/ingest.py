@@ -110,7 +110,11 @@ INGEST_SYSTEM_PROMPT = """你是一個知識整理助手，負責將文件內容
 - 頁數依內容量決定：薄文件 5~10 頁、厚文件 15~30 頁
 - 每份文件最多 1~2 個 summary 頁；其餘是 entity（人/組織/產品）或 concept（概念/技術/方法）
 - 一頁一主題：A 和 B 是不同實體就拆 2 頁，再用 [[B]] 互連
-- 同類 entity/concept ≥3 個時，多建 1 個 index 頁當入口
+- **index 頁是 query 路由的入口**：同類 entity/concept ≥3 個時主動建一個 index 頁
+  - title 像「XX 領域」「XX 系列人物」這種能代表一群頁面的主題詞
+  - content 是條列式 [[標題]] 清單，分類列出該主題下所有頁面
+  - links_to 必須涵蓋所有被列出的頁面
+  - 沒有 index 頁，query 時只能逐頁搜尋，整個 wiki 路由會崩潰
 
 content 欄位（重點）：
 - **本頁是 wiki 的肉**，要寫成可獨立閱讀的完整段落：原文細節、引用、上下文都要保留
@@ -269,6 +273,116 @@ async def back_link_pass(
     if applied:
         await db.commit()
     return applied
+
+
+async def synthesize_doc_index_page(
+    db: AsyncSession,
+    doc: Document,
+    pages_created: list[dict],
+    doc_summary: str,
+) -> dict | None:
+    """為這份文件 upsert 一個 doc-level 索引頁。code-side 合成，不依賴 LLM。
+
+    query 路由用 page_type='index' 當錨點。LLM prompt 雖鼓勵建 index，但實際常忽略，
+    因此這裡兜底保證每份「貢獻 ≥3 個主題頁」的文件都有 1 個索引頁可被 query 命中。
+    LLM 自己生的 topic-cluster index 仍會保留（slug 不衝突），兩種共存。
+    """
+    if len(pages_created) < 3:
+        return None
+
+    created_slugs = [p["slug"] for p in pages_created]
+    pages_result = await db.execute(
+        select(WikiPage).where(
+            WikiPage.api_key_id == doc.api_key_id,
+            WikiPage.slug.in_(created_slugs),
+        )
+    )
+    pages = pages_result.scalars().all()
+    topic_pages = [p for p in pages if p.page_type != "index"]
+    if len(topic_pages) < 3:
+        return None
+
+    doc_stem = Path(doc.filename).stem if doc.filename else "doc"
+    base_slug = slugify(doc_stem)[:40] or "doc"
+    index_slug = f"doc-index-{base_slug}-{str(doc.id)[:8]}"
+    index_title = f"{doc_stem} 索引"
+
+    type_label = {"entity": "實體", "concept": "概念", "summary": "摘要"}
+    by_type: dict[str, list[WikiPage]] = {}
+    for p in topic_pages:
+        by_type.setdefault(p.page_type, []).append(p)
+
+    content_lines = [f"本頁是文件「{doc_stem}」的索引，列出此文件貢獻的所有主題頁。", ""]
+    for ptype in ("summary", "entity", "concept"):
+        ps = by_type.get(ptype)
+        if not ps:
+            continue
+        content_lines.append(f"## {type_label.get(ptype, ptype)}")
+        for p in sorted(ps, key=lambda x: x.title):
+            content_lines.append(f"- [[{p.title}]]")
+        content_lines.append("")
+    for ptype, ps in by_type.items():
+        if ptype in ("summary", "entity", "concept"):
+            continue
+        content_lines.append(f"## {type_label.get(ptype, ptype)}")
+        for p in sorted(ps, key=lambda x: x.title):
+            content_lines.append(f"- [[{p.title}]]")
+        content_lines.append("")
+    content = "\n".join(content_lines).strip()
+
+    summary = (doc_summary or "").strip().replace("\n", " ")[:200]
+    if not summary:
+        topics = "、".join(p.title for p in topic_pages[:5])
+        summary = f"{doc_stem} 文件索引：涵蓋 {topics} 等 {len(topic_pages)} 個主題"
+
+    existing = await db.execute(
+        select(WikiPage).where(
+            WikiPage.api_key_id == doc.api_key_id,
+            WikiPage.slug == index_slug,
+        )
+    )
+    index_page = existing.scalar_one_or_none()
+    if index_page:
+        index_page.title = index_title
+        index_page.content = content
+        index_page.summary = summary
+        index_page.page_type = "index"
+        index_page.updated_at = datetime.utcnow()
+        if index_page.source_document_id is None:
+            index_page.source_document_id = doc.id
+    else:
+        index_page = WikiPage(
+            api_key_id=doc.api_key_id,
+            source_document_id=doc.id,
+            title=index_title,
+            slug=index_slug,
+            content=content,
+            page_type="index",
+            summary=summary,
+        )
+        db.add(index_page)
+    await db.flush()
+
+    src_exists = await db.execute(
+        select(WikiPageSource).where(
+            WikiPageSource.wiki_page_id == index_page.id,
+            WikiPageSource.document_id == doc.id,
+        )
+    )
+    if src_exists.scalar_one_or_none() is None:
+        db.add(WikiPageSource(wiki_page_id=index_page.id, document_id=doc.id))
+        await db.flush()
+
+    old_links = await db.execute(
+        select(WikiLink).where(WikiLink.source_page_id == index_page.id)
+    )
+    for link in old_links.scalars():
+        await db.delete(link)
+    for tp in topic_pages:
+        db.add(WikiLink(source_page_id=index_page.id, target_page_id=tp.id))
+    await db.flush()
+
+    return {"id": str(index_page.id), "title": index_title, "slug": index_slug}
 
 
 def build_existing_wiki_context(pages: list) -> str:
@@ -707,6 +821,21 @@ async def run_ingest(document_id: uuid.UUID) -> None:
                 doc_summary = data.get("summary", "")
                 all_pages_created = await _apply_ingest_result(
                     db, doc.id, doc.api_key_id, data,
+                )
+
+            # Code-side 兜底：保證本文件有一個 doc-level 索引頁可供 query 路由。
+            # 必須在 stale cleanup 之前跑，靠新的 updated_at 把舊索引保住、避免被刪。
+            try:
+                doc_index = await synthesize_doc_index_page(
+                    db, doc, all_pages_created, doc_summary,
+                )
+                if doc_index:
+                    all_pages_created.append(doc_index)
+                    await db.commit()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "synthesize_doc_index_page failed for doc %s: %s", doc.id, e,
                 )
 
             # 成功完成：清理本份文件曾貢獻、但這次沒被 upsert 到的 stale 頁面。

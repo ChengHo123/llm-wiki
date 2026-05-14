@@ -9,6 +9,7 @@ from app.models.wiki_page import WikiPage
 from app.models.wiki_link import WikiLink
 from app.models.activity_log import ActivityLog
 from app.services.llm import call_llm
+from app.services.wiki_links import reconcile_wiki_links_from_content
 
 APPLY_SYSTEM_PROMPT = """你是 wiki 編輯助手。
 基於使用者提供的 issues（每個含 description 與 suggestion），改寫下方 wiki 頁面內容以解決所有 issues。
@@ -224,11 +225,15 @@ async def apply_lint_fixes(
         # content 改了 → summary 失效；清空讓 backfill 路徑或下次 ingest 重產
         # （避免在 lint 流程裡多花一次 LLM 呼叫去同步 summary）
         page.summary = ""
+        # content 改了 → outgoing wiki_links 失效；用 content 中的 [[...]] 重建邊，
+        # 確保圖譜、index 路由的鄰居展開都看到最新連結
+        link_count = await reconcile_wiki_links_from_content(db, page, api_key_id)
         applied.append({
             "page_slug": slug,
             "page_id": str(page.id),
             "title": page.title,
             "issues_addressed": len(slug_issues),
+            "links_rebuilt": link_count,
         })
 
     db.add(ActivityLog(

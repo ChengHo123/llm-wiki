@@ -12,6 +12,7 @@ from app.models.wiki_page import WikiPage
 from app.models.wiki_link import WikiLink
 from app.models.activity_log import ActivityLog
 from app.services.llm import call_llm, stream_llm, structured_call
+from app.services.wiki_links import reconcile_wiki_links_from_content
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -36,12 +37,12 @@ class SaveJudgment(BaseModel):
 
 class PageEdit(BaseModel):
     action: Literal["update", "create"] = Field(
-        description="update=改寫既有頁（slug 須存在於既有頁），create=建新 entity/concept 頁"
+        description="update=改寫既有頁（slug 須存在於既有頁），create=建新頁"
     )
     slug: str = Field(description="kebab-case slug；update 用既有 slug，create 用新 slug")
     title: str = Field(description="頁面標題")
-    page_type: Literal["entity", "concept"] = Field(
-        description="entity=人名/組織/產品，concept=概念/技術"
+    page_type: Literal["entity", "concept", "index"] = Field(
+        description="entity=人名/組織/產品，concept=概念/技術，index=主題索引頁（條列 [[頁面]] 入口）"
     )
     summary: str = Field(
         default="",
@@ -78,8 +79,25 @@ CHAT_ONLY_SYSTEM_PROMPT = """你正在跟使用者自然聊天，不需要查任
 """
 
 
-# Phase 1：讓 LLM 從 summary 索引挑「進入點」(anchor) 頁面。
-# 系統會自動透過 wiki_links 把鄰居（連入/連出 1 hop）加入回答 context，所以不用挑全部。
+# Phase 1A：純 index 路由（首選）。只把 page_type='index' 的頁面送給 LLM，挑進入點，
+# 系統自動沿 wiki_links 1-hop 擴展，把 index 指向的 entity/concept 帶進 context。
+SELECT_INDEX_PROMPT = """你是一個 LLM Wiki 的查詢路由。
+給定一個問題和 wiki 的**索引頁列表**（每個索引頁是一群主題頁的入口），挑出 1~3 個**最直接命中問題核心**的索引頁。
+
+設計原則：
+- 系統會自動沿 [[wikilink]] 1-hop，把你選的索引頁所指向的主題頁全部帶進回答 context
+- 索引頁的價值就是它**指向一整批相關主題**；選對索引頁等於選對整個主題網絡
+- 不需要挑全部相關索引，挑最核心的就好
+
+判斷標準：
+- 問題明確指涉某個索引主題 → 該索引就是 anchor
+- 問題綜合性 → 挑 2 個各代表一個面向
+- 問題曖昧 → 寧可挑 2 個，不要全選
+
+只回傳 slug 列表；若沒任何索引頁適合，回傳空列表（系統會 fallback）。
+"""
+
+# Phase 1B：fallback。當 wiki 還沒有足夠 index 頁時，退回看全頁 summary 挑 anchor。
 SELECT_PAGES_PROMPT = """你是一個 LLM Wiki 的查詢路由。
 給定一個問題和 wiki 頁面的 summary 索引，挑出 1~5 個**最直接命中問題核心**的 anchor 頁面。
 
@@ -146,22 +164,27 @@ REFINE_SYSTEM_PROMPT = WIKI_SOUL + """
 
 ## 輸入
 - 使用者問題 + LLM 回答
-- 既有相關 wiki 頁面（含完整內容）
+- 既有相關 wiki 頁面（含完整內容），含可能的 index 頁
 
-## 三種正確做法（對應到 action）
-1. **update（補充既有頁）**：答案對某既有頁有新 context / 細節 / 連結 → 改寫該頁，**保留原精髓**，自然嵌入新資訊與 [[跨頁連結]]
-2. **create（新建頁面）**：答案合成出一個獨立、普適的新 entity/concept，且**真的找不到既有頁可併入**
-3. **skip（不存）**：edits 回傳空列表
+## 編輯類型（對應到 action + page_type）
+1. **update entity/concept**：答案對某既有頁有新 context / 細節 / 連結 → 改寫該頁，保留原精髓，自然嵌入新資訊與 [[跨頁連結]]
+2. **create entity/concept**：答案合成出一個獨立、普適的新概念，且**真的找不到既有頁可併入**
+3. **update index**：新建了 entity/concept 頁，且輸入中有合適的既有 index 頁能納入這個新主題 → update 該 index，content 補上 `- [[新頁標題]]` 條目
+4. **create index**：≥3 個相關既有頁（或本次新建頁）沒有 index 串連 → 建一個主題式 index 頁，content 條列 `[[頁面]]` 入口
+5. **skip**：edits 回傳空列表
 
 ## 嚴格規則
 - 優先 update，慎用 create（每多一個低價值頁面都在汙染 wiki）
 - update 的 slug 必須是輸入中既有頁的 slug，不准創新
 - create 的 slug 要英文 kebab-case，且避免和既有頁衝突
-- page_type 只能是 entity（人/組織/產品）或 concept（概念/技術）
+- page_type 只能是 entity / concept / index
+- index 頁的 content 必須有 ≥3 個 [[頁面]] 條目；不要建只有 1-2 個連結的 index
 - **絕對禁止**建立 "Q: xxx"、"query-xxx"、"chat-xxx"、"如何xxx" 這類 Q&A 風格頁面
+- **絕對禁止**自創沒在既有頁列表中的 slug 當作 [[連結]] 目標——只能連既有頁或本批次同時 create 的頁
 - update 時 content 要是**整合後完整新版本**，不是 diff、不是片段
 - 每個 edit 都要產生 1-2 句、最多 150 字的 `summary`，濃縮本頁重點，供 wiki 索引/路由使用
 - 每個 edit 都要給 reason 說明動機，方便事後追蹤
+- 若要 create entity/concept 又 update index 把它納入，請把 create 排在 update 之前（系統依序套用）
 - 不確定要不要存 → skip。寧可漏存，不可亂建頁
 """
 
@@ -170,8 +193,14 @@ async def refine_wiki_plan(
     question: str,
     answer: str,
     referenced_pages: list[WikiPage],
+    all_index_pages: list[WikiPage] | None = None,
 ) -> RefinePlan:
-    """用 LLM 產生 refine plan：要 update 哪些既有頁 / create 哪些新頁。"""
+    """用 LLM 產生 refine plan：要 update 哪些既有頁 / create 哪些新頁。
+
+    referenced_pages 是這輪 query 路由帶進的鄰居頁（含 content）。
+    all_index_pages 是 wiki 內所有 page_type='index' 頁（輕量：只 slug+title+summary，不含 content），
+    讓 LLM 在決定 update/create index 時看得到全 index 表，不會因為某 index 沒被本輪路由命中就盲建新的。
+    """
     if referenced_pages:
         bodies = degrade_page_bodies(referenced_pages, max_chars=40000)
         pages_ctx = "\n\n".join(
@@ -181,9 +210,22 @@ async def refine_wiki_plan(
     else:
         pages_ctx = "(無既有相關頁)"
 
+    index_ctx = ""
+    if all_index_pages:
+        referenced_slugs = {p.slug for p in referenced_pages}
+        extra_indexes = [p for p in all_index_pages if p.slug not in referenced_slugs]
+        if extra_indexes:
+            lines = ["<all_index_pages>"]
+            for p in extra_indexes:
+                s = (p.summary or "").strip().replace("\n", " ")[:200] or p.title
+                lines.append(f"- slug: {p.slug} | title: {p.title} | summary: {s}")
+            lines.append("</all_index_pages>")
+            index_ctx = "\n".join(lines) + "\n\n"
+
     user_msg = (
         f"問題：{question}\n\n"
         f"回答：{answer}\n\n"
+        f"{index_ctx}"
         f"既有相關頁面：\n{pages_ctx}"
     )
     return await structured_call(
@@ -199,7 +241,11 @@ async def apply_refine_plan(
     api_key_id: uuid.UUID,
     db: AsyncSession,
 ) -> list[dict]:
-    """套用 refine plan，回傳實際執行的 edits（略過無效 slug）。"""
+    """套用 refine plan，回傳實際執行的 edits（略過無效 slug）。
+
+    每筆 edit 完成後重建該頁的 outgoing wiki_links，確保 [[wikilink]] → DB 邊一致。
+    這對 index 頁尤其關鍵：query 路由依賴 wiki_links 從 index 1-hop 展開到主題頁。
+    """
     applied: list[dict] = []
     for edit in plan.edits:
         if edit.action == "update":
@@ -237,12 +283,14 @@ async def apply_refine_plan(
             )
             db.add(page)
         await db.flush()
+        link_count = await reconcile_wiki_links_from_content(db, page, api_key_id)
         applied.append({
             "action": edit.action,
             "slug": edit.slug,
             "title": edit.title,
             "page_type": edit.page_type,
             "reason": edit.reason,
+            "links_rebuilt": link_count,
         })
     return applied
 
@@ -420,41 +468,66 @@ async def _expand_via_wiki_links(
     return anchors + neighbors
 
 
-async def select_relevant_pages(
+MIN_INDEX_PAGES_FOR_ROUTING = 2
+
+
+def _page_summary_blurb(p: WikiPage, max_chars: int = 300) -> str:
+    if p.summary and p.summary.strip():
+        return p.summary.strip().replace("\n", " ")[:max_chars]
+    return (p.content or "").strip().replace("\n", " ")[:max_chars]
+
+
+async def _route_via_index(
+    question: str,
+    index_pages: list[WikiPage],
+    all_pages: list[WikiPage],
+    db: AsyncSession,
+    context_cap: int,
+) -> list[WikiPage]:
+    """A 方案核心：LLM 只看 index 頁挑 anchor，沿 wiki_links 1-hop 展開。"""
+    listing = "\n".join(
+        f"- slug: \"{p.slug}\" | title: \"{p.title}\" | summary: {_page_summary_blurb(p)}"
+        for p in index_pages
+    )
+    try:
+        result = await structured_call(
+            schema=PageSelection,
+            system=SELECT_INDEX_PROMPT,
+            user=f"問題：{question}\n\n索引頁列表：\n{listing}",
+            max_tokens=1024,
+        )
+        anchor_slugs = set(result.relevant_slugs)
+    except Exception:
+        anchor_slugs = set()
+
+    anchor_pages = [p for p in index_pages if p.slug in anchor_slugs]
+
+    # Fallback 1：LLM 沒選 → index 頁內關鍵字比對
+    if not anchor_pages:
+        anchor_pages = _keyword_match(question, index_pages, limit=3)
+
+    # Fallback 2：仍零中 → 最新的一個 index 頁
+    if not anchor_pages:
+        anchor_pages = sorted(index_pages, key=lambda p: p.updated_at, reverse=True)[:1]
+
+    anchor_ids = {p.id for p in anchor_pages}
+    selected = await _expand_via_wiki_links(db, anchor_ids, all_pages, hops=1)
+    if len(selected) > context_cap:
+        selected = selected[:context_cap]
+    return selected
+
+
+async def _route_via_summary(
     question: str,
     all_pages: list[WikiPage],
-    db: AsyncSession | None = None,
-    max_pages: int | None = None,
+    db: AsyncSession | None,
+    context_cap: int,
 ) -> list[WikiPage]:
-    """
-    LLM Wiki 風格 query：
-    1. LLM 看 summary 索引，挑 1~5 個 anchor
-    2. 從 anchor 沿 wiki_links 1-hop 擴展（沒 db 時略過）
-    3. 受 MAX_QUERY_CONTEXT_PAGES 上限保護
-    LLM 失敗時退用關鍵字比對；零匹配時退用最新頁。
-    """
-    if not all_pages:
-        return []
-
-    if max_pages is None:
-        max_pages = settings.MAX_WIKI_PAGES
-    context_cap = settings.MAX_QUERY_CONTEXT_PAGES
-
-    # 小型 wiki 直接全量帶入；但仍受 MAX_QUERY_CONTEXT_PAGES 上限保護
-    if len(all_pages) <= context_cap:
-        return list(all_pages)
-
-    # 送 title + slug + summary 索引給 LLM 挑 anchor
-    def _summary(p: WikiPage) -> str:
-        if p.summary and p.summary.strip():
-            return p.summary.strip().replace("\n", " ")[:300]
-        return (p.content or "").strip().replace("\n", " ")[:300]
-
+    """Fallback 路由：wiki 還沒累積足夠 index 頁時用。看全頁 summary 挑 anchor，沿 links 擴展。"""
     index = "\n".join(
-        f"- slug: \"{p.slug}\" | title: \"{p.title}\" | type: {p.page_type} | summary: {_summary(p)}"
+        f"- slug: \"{p.slug}\" | title: \"{p.title}\" | type: {p.page_type} | summary: {_page_summary_blurb(p)}"
         for p in all_pages
     )
-
     try:
         result = await structured_call(
             schema=PageSelection,
@@ -466,30 +539,55 @@ async def select_relevant_pages(
     except Exception:
         anchor_slugs = set()
 
-    # 取出 anchor 頁面
     anchor_pages = [p for p in all_pages if p.slug in anchor_slugs]
-
-    # Fallback 1: LLM 沒選或失敗 → 用關鍵字比對取最高分前幾個當 anchor
     if not anchor_pages:
         anchor_pages = _keyword_match(question, all_pages, limit=5)
-
-    # Fallback 2: 全零匹配 → 最新幾頁當 anchor
     if not anchor_pages:
         anchor_pages = sorted(all_pages, key=lambda p: p.updated_at, reverse=True)[:5]
 
     anchor_ids = {p.id for p in anchor_pages}
-
-    # 沿 wiki_links 擴展鄰居（需要 db）。沒給 db 就只回 anchor。
     if db is None:
         selected = anchor_pages
     else:
         selected = await _expand_via_wiki_links(db, anchor_ids, all_pages, hops=1)
-
-    # 硬上限保護
     if len(selected) > context_cap:
         selected = selected[:context_cap]
-
     return selected
+
+
+async def select_relevant_pages(
+    question: str,
+    all_pages: list[WikiPage],
+    db: AsyncSession | None = None,
+    max_pages: int | None = None,
+) -> list[WikiPage]:
+    """
+    LLM Wiki 風格 query 路由：
+    - 首選：只把 page_type='index' 頁送 LLM 挑 anchor，沿 wiki_links 1-hop 展開
+    - Fallback：wiki 還沒累積 >=2 個 index 頁時，退回全頁 summary 模式（舊行為）
+    - 小型 wiki（≤ context_cap）直接全量帶入，不路由
+    """
+    if not all_pages:
+        return []
+
+    if max_pages is None:
+        max_pages = settings.MAX_WIKI_PAGES
+    context_cap = settings.MAX_QUERY_CONTEXT_PAGES
+
+    if len(all_pages) <= context_cap:
+        return list(all_pages)
+
+    index_pages = [p for p in all_pages if p.page_type == "index"]
+
+    if db is not None and len(index_pages) >= MIN_INDEX_PAGES_FOR_ROUTING:
+        return await _route_via_index(question, index_pages, all_pages, db, context_cap)
+
+    import logging
+    logging.getLogger(__name__).info(
+        "select_relevant_pages: using summary fallback (index_pages=%d, db=%s)",
+        len(index_pages), "yes" if db is not None else "no",
+    )
+    return await _route_via_summary(question, all_pages, db, context_cap)
 
 
 async def run_query(

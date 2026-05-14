@@ -237,31 +237,58 @@ export default function WikiPage() {
           <BookOpen size={40} className="mx-auto mb-3 opacity-30" />
           <p>尚未有 wiki 頁面，請先上傳文件</p>
         </div>
-      ) : (
-        <div className="grid gap-3">
-          {pages.map((page) => (
-            <button
-              key={page.id}
-              onClick={() => openPage(page.id)}
-              className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-xl p-4 text-left hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-sm transition-all"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_COLOR[page.page_type] || 'bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-zinc-400'}`}>
-                      {page.page_type}
-                    </span>
-                  </div>
-                  <h3 className="font-medium text-gray-800 dark:text-zinc-200 truncate">{page.title}</h3>
+      ) : (() => {
+        const indexPages = pages.filter((p) => p.page_type === 'index')
+        const otherPages = pages.filter((p) => p.page_type !== 'index')
+        const renderPage = (page: WikiPageSummary, accent?: boolean) => (
+          <button
+            key={page.id}
+            onClick={() => openPage(page.id)}
+            className={
+              accent
+                ? 'bg-purple-50 dark:bg-purple-950/40 border-2 border-purple-300 dark:border-purple-700 rounded-xl p-4 text-left hover:border-purple-500 dark:hover:border-purple-500 hover:shadow-sm transition-all'
+                : 'bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-xl p-4 text-left hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-sm transition-all'
+            }
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${PAGE_TYPE_COLOR[page.page_type] || 'bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-zinc-400'}`}>
+                    {page.page_type}
+                  </span>
                 </div>
-                <span className="text-xs text-gray-400 dark:text-zinc-500 flex-shrink-0">
-                  {new Date(page.updated_at).toLocaleDateString('zh-TW')}
-                </span>
+                <h3 className="font-medium text-gray-800 dark:text-zinc-200 truncate">{page.title}</h3>
               </div>
-            </button>
-          ))}
-        </div>
-      )}
+              <span className="text-xs text-gray-400 dark:text-zinc-500 flex-shrink-0">
+                {new Date(page.updated_at).toLocaleDateString('zh-TW')}
+              </span>
+            </div>
+          </button>
+        )
+        return (
+          <>
+            {indexPages.length > 0 && (
+              <section className="mb-6">
+                <div className="flex items-baseline gap-2 mb-2">
+                  <h2 className="text-sm font-semibold text-purple-700 dark:text-purple-400">主題索引</h2>
+                  <span className="text-xs text-gray-400 dark:text-zinc-500">查詢路由的入口；每個索引涵蓋一群相關頁面</span>
+                </div>
+                <div className="grid gap-3">
+                  {indexPages.map((p) => renderPage(p, true))}
+                </div>
+              </section>
+            )}
+            <section>
+              {indexPages.length > 0 && otherPages.length > 0 && (
+                <h2 className="text-sm font-semibold text-gray-500 dark:text-zinc-400 mb-2">所有頁面</h2>
+              )}
+              <div className="grid gap-3">
+                {otherPages.map((p) => renderPage(p))}
+              </div>
+            </section>
+          </>
+        )
+      })()}
     </div>
   )
 }
