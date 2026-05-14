@@ -3,15 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Send, BookmarkPlus, BookmarkX, BookOpen, Loader2, Brain, ChevronDown, ChevronRight, Camera, MessageCircle } from 'lucide-react'
 import { toPng } from 'html-to-image'
-import { queryWikiStream } from '../api/client'
-
-interface RefineEdit {
-  action: 'update' | 'create'
-  slug: string
-  title: string
-  page_type: 'entity' | 'concept'
-  reason: string
-}
+import { queryWikiStream, type RefineEdit } from '../api/client'
 
 interface Message {
   role: 'user' | 'assistant'
