@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.wiki_page import WikiPage
+from app.models.wiki_link import WikiLink
 from app.models.activity_log import ActivityLog
 from app.services.llm import call_llm, stream_llm, structured_call
 from app.core.config import get_settings
@@ -24,7 +25,7 @@ class RouteDecision(BaseModel):
 class PageSelection(BaseModel):
     relevant_slugs: list[str] = Field(
         default_factory=list,
-        description="與問題最相關的 wiki 頁面 slug 列表（最多 8 個）",
+        description="作為查詢進入點的 anchor 頁面 slug 列表，挑 1~5 個就好；系統會自動展開鄰居",
     )
 
 
@@ -77,11 +78,22 @@ CHAT_ONLY_SYSTEM_PROMPT = """你正在跟使用者自然聊天，不需要查任
 """
 
 
-# Phase 1：讓 LLM 從標題列表挑出相關頁面
-SELECT_PAGES_PROMPT = """你是一個知識庫搜尋助手。
-給定一個問題和 wiki 頁面列表，挑出**所有**與問題相關的頁面，**數量不限**。
-寧可多選不要漏；單一文件（例如一本小說）的多個相關頁面要全部選出，避免回答時資訊不完整。
-只回傳 slug 列表；若真的完全無相關，回傳空列表。
+# Phase 1：讓 LLM 從 summary 索引挑「進入點」(anchor) 頁面。
+# 系統會自動透過 wiki_links 把鄰居（連入/連出 1 hop）加入回答 context，所以不用挑全部。
+SELECT_PAGES_PROMPT = """你是一個 LLM Wiki 的查詢路由。
+給定一個問題和 wiki 頁面的 summary 索引，挑出 1~5 個**最直接命中問題核心**的 anchor 頁面。
+
+設計原則：
+- 系統會自動把 anchor 的鄰居（透過 [[wikilink]] 連入/連出 1 hop）一起帶進回答 context
+- 所以你**不需要挑全部相關頁**，挑最核心的入口就好
+- 像查百科一樣：找最相關的條目當入口，剩下靠交叉引用展開
+
+判斷標準：
+- 問題明確指涉的實體 / 概念 → 該頁就是 anchor
+- 問題是綜合性主題 → 挑代表性的 index 或 summary 頁
+- 問題曖昧 → 寧可挑 2-3 個 anchor 各代表一個解讀，不要選 10 幾個
+
+只回傳 slug 列表；若 wiki 完全沒任何相關頁，回傳空列表。
 """
 
 # Phase 2：用選出的頁面完整內容來回答
@@ -370,29 +382,69 @@ def _keyword_match(
     return matched[:limit] if limit is not None else matched
 
 
+async def _expand_via_wiki_links(
+    db: AsyncSession,
+    anchor_ids: set,
+    all_pages: list[WikiPage],
+    hops: int = 1,
+) -> list[WikiPage]:
+    """從 anchor 沿 wiki_links 走 N hop，回傳 anchor + 鄰居頁面（去重，保留 anchor 順序在前）。"""
+    page_by_id = {p.id: p for p in all_pages}
+    visited = set(anchor_ids)
+    frontier = set(anchor_ids)
+    for _ in range(max(0, hops)):
+        if not frontier:
+            break
+        links_result = await db.execute(
+            select(WikiLink).where(
+                (WikiLink.source_page_id.in_(frontier))
+                | (WikiLink.target_page_id.in_(frontier))
+            )
+        )
+        next_frontier = set()
+        for lnk in links_result.scalars():
+            for nid in (lnk.source_page_id, lnk.target_page_id):
+                if nid not in visited and nid in page_by_id:
+                    next_frontier.add(nid)
+                    visited.add(nid)
+        frontier = next_frontier
+    # anchor 先排前面，鄰居依 updated_at 後排
+    anchors = [page_by_id[i] for i in anchor_ids if i in page_by_id]
+    neighbors = [
+        p for p in sorted(
+            (page_by_id[i] for i in visited if i not in anchor_ids and i in page_by_id),
+            key=lambda p: p.updated_at,
+            reverse=True,
+        )
+    ]
+    return anchors + neighbors
+
+
 async def select_relevant_pages(
     question: str,
     all_pages: list[WikiPage],
+    db: AsyncSession | None = None,
     max_pages: int | None = None,
 ) -> list[WikiPage]:
     """
-    Phase 1：小型 wiki（≤max_pages）全量帶入；否則用 LLM 挑選**所有相關頁面**（不再硬截斷）。
-    index 帶 content 摘要讓 LLM 有線索，並以關鍵字比對作 fallback。
+    LLM Wiki 風格 query：
+    1. LLM 看 summary 索引，挑 1~5 個 anchor
+    2. 從 anchor 沿 wiki_links 1-hop 擴展（沒 db 時略過）
+    3. 受 MAX_QUERY_CONTEXT_PAGES 上限保護
+    LLM 失敗時退用關鍵字比對；零匹配時退用最新頁。
     """
     if not all_pages:
         return []
 
     if max_pages is None:
         max_pages = settings.MAX_WIKI_PAGES
+    context_cap = settings.MAX_QUERY_CONTEXT_PAGES
 
     # 小型 wiki 直接全量帶入；但仍受 MAX_QUERY_CONTEXT_PAGES 上限保護
-    if len(all_pages) <= max_pages:
-        context_cap = settings.MAX_QUERY_CONTEXT_PAGES
-        if len(all_pages) <= context_cap:
-            return list(all_pages)
-        # 全量超過 context cap → 退回 LLM 選擇路徑做篩選
+    if len(all_pages) <= context_cap:
+        return list(all_pages)
 
-    # 送 title + slug + 預先計算的 summary 給 LLM；若 summary 空（舊資料未補）退回用 content[:300]
+    # 送 title + slug + summary 索引給 LLM 挑 anchor
     def _summary(p: WikiPage) -> str:
         if p.summary and p.summary.strip():
             return p.summary.strip().replace("\n", " ")[:300]
@@ -407,27 +459,34 @@ async def select_relevant_pages(
         result = await structured_call(
             schema=PageSelection,
             system=SELECT_PAGES_PROMPT,
-            user=f"問題：{question}\n\nWiki 頁面列表：\n{index}",
+            user=f"問題：{question}\n\nWiki 頁面 summary 索引：\n{index}",
             max_tokens=1024,
         )
-        relevant_slugs = set(result.relevant_slugs)
+        anchor_slugs = set(result.relevant_slugs)
     except Exception:
-        relevant_slugs = set()
+        anchor_slugs = set()
 
-    selected = [p for p in all_pages if p.slug in relevant_slugs]
+    # 取出 anchor 頁面
+    anchor_pages = [p for p in all_pages if p.slug in anchor_slugs]
 
-    # Fallback 1: LLM 沒選任何頁面 → 用關鍵字比對
-    if not selected:
-        selected = _keyword_match(question, all_pages)
+    # Fallback 1: LLM 沒選或失敗 → 用關鍵字比對取最高分前幾個當 anchor
+    if not anchor_pages:
+        anchor_pages = _keyword_match(question, all_pages, limit=5)
 
-    # Fallback 2: 真的零匹配 → 最新 max_pages 頁（沒任何線索時的最後一招）
-    if not selected:
-        selected = sorted(all_pages, key=lambda p: p.updated_at, reverse=True)[:max_pages]
+    # Fallback 2: 全零匹配 → 最新幾頁當 anchor
+    if not anchor_pages:
+        anchor_pages = sorted(all_pages, key=lambda p: p.updated_at, reverse=True)[:5]
 
-    # 硬上限：超過 MAX_QUERY_CONTEXT_PAGES 就截斷，避免 prompt 太大爆 context window
-    context_cap = settings.MAX_QUERY_CONTEXT_PAGES
+    anchor_ids = {p.id for p in anchor_pages}
+
+    # 沿 wiki_links 擴展鄰居（需要 db）。沒給 db 就只回 anchor。
+    if db is None:
+        selected = anchor_pages
+    else:
+        selected = await _expand_via_wiki_links(db, anchor_ids, all_pages, hops=1)
+
+    # 硬上限保護
     if len(selected) > context_cap:
-        # 優先保留 LLM 選中的（順序視同重要性），不夠才用其他 fallback；都不夠就截斷
         selected = selected[:context_cap]
 
     return selected
@@ -470,7 +529,7 @@ async def run_query(
             "route": {"need_wiki": False, "reason": decision.reason},
         }
 
-    pages = await select_relevant_pages(question, all_pages)
+    pages = await select_relevant_pages(question, all_pages, db=db)
 
     bodies = degrade_page_bodies(pages, max_chars=60000)
     wiki_context = "\n\n".join(
@@ -593,7 +652,7 @@ async def run_query_stream(
             yield json.dumps({"type": "done"}) + "\n"
             return
 
-        pages = await select_relevant_pages(question, all_pages)
+        pages = await select_relevant_pages(question, all_pages, db=db)
 
         referenced_pages = [{"id": str(p.id), "title": p.title, "slug": p.slug} for p in pages]
         yield json.dumps({"type": "pages", "pages": referenced_pages}) + "\n"

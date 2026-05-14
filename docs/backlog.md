@@ -4,12 +4,14 @@
 
 ---
 
-## P0 — Context Budget / 工程缺陷（2026-05-11 健檢）
+## P0 — Context Budget / 工程缺陷（2026-05-11 健檢）✅ 全數於 v0.4.6 修復
 
 線上已發生「LLM 回空 / context window 爆掉」事故。根因是多個路徑沒做 context budget 管控；
 `run_query` 已做 two-phase 減枝，其他三條路徑同樣高風險。
 
-### A. `run_query_stream` 沒做 context 減枝 🔴
+> v0.4.6 commit: `refactor(wiki): backend audit fixes — context budget, summary sync, lint batching`
+
+### A. `run_query_stream` 沒做 context 減枝 ✅
 
 **位置：** `backend/app/services/query_service.py` ~line 588-591
 
@@ -19,7 +21,7 @@
 
 ---
 
-### B. `refine_wiki_plan` 沒做 context 減枝 🔴
+### B. `refine_wiki_plan` 沒做 context 減枝 ✅
 
 **位置：** `backend/app/services/query_service.py` ~line 159-176
 
@@ -29,7 +31,7 @@
 
 ---
 
-### C. `back_link_pass` 沒做 context 減枝 🔴
+### C. `back_link_pass` 沒做 context 減枝 ✅
 
 **位置：** `backend/app/services/ingest.py` ~line 212-230
 
@@ -39,7 +41,7 @@
 
 ---
 
-### D. `apply_refine_plan` 新建頁面未初始化新欄位 🔴
+### D. `apply_refine_plan` 新建頁面未初始化新欄位 ✅
 
 **位置：** `backend/app/services/query_service.py` `apply_refine_plan`
 
@@ -55,7 +57,7 @@
 
 ---
 
-### E. `apply_lint_fixes` / `back_link_pass` 改寫 content 後 summary 不同步 🟡
+### E. `apply_lint_fixes` / `back_link_pass` 改寫 content 後 summary 不同步 ✅
 
 **位置：** `backend/app/services/lint.py` `apply_lint_fixes`、`backend/app/services/ingest.py` `back_link_pass`
 
@@ -68,7 +70,7 @@
 
 ---
 
-### F. `route_query` 失敗 fallback 應該走 chat-only 🟡
+### F. `route_query` 失敗 fallback 應該走 chat-only ✅
 
 **位置：** `backend/app/services/query_service.py` ~line 297-299
 
@@ -80,7 +82,7 @@
 
 ---
 
-### G. `run_lint` 只看前 30 頁、JSON 解析無防呆 🟡
+### G. `run_lint` 只看前 30 頁、JSON 解析無防呆 ✅
 
 **位置：** `backend/app/services/lint.py` ~line 95、104-106
 
@@ -94,7 +96,7 @@
 
 ---
 
-### H. `build_existing_wiki_context` 沒用新的 summary 欄位 🟡
+### H. `build_existing_wiki_context` 沒用新的 summary 欄位 ✅
 
 **位置：** `backend/app/services/ingest.py` ~line 251-260
 
@@ -104,7 +106,7 @@
 
 ---
 
-### I. ActivityLog `details` 沒有 schema 文件 🟢
+### I. ActivityLog `details` 沒有 schema 文件 ✅
 
 **現況：** 各 action 的 details 結構各異：
 - `chat`: `{}`
@@ -117,7 +119,7 @@
 
 ---
 
-### J. WikiPage 刪除沒記 ActivityLog 🟢
+### J. WikiPage 刪除沒記 ActivityLog ✅
 
 **現況：** 文件刪 / wiki page 手動刪都沒留審計痕跡。
 
@@ -178,19 +180,15 @@ Lint 掃到「過期聲明」時，可選擇性 web search 驗證。Karpathy 原
 
 ---
 
-## 優先順序
+## 目前剩餘工項
 
-| 順序 | 項目 | 理由 |
+| 順序 | 項目 | 狀態 |
 |------|------|------|
-| 1 | **P0-B refine 減枝** | 線上已爆 CW |
-| 2 | **P0-C back_link 減枝** | 線上會在 ingest 期間爆 |
-| 3 | **P0-A run_query_stream 減枝** | web 端 streaming 用，同 budget 風險 |
-| 4 | **P0-D apply_refine_plan 補欄位** | summary backfill 補不到 chat 來源頁 |
-| 5 | **P0-F route fallback 修正** | 短閒聊走 wiki 浪費 token + 觸發其他 bug |
-| 6 | **P0-E summary 同步** | 索引品質劣化 |
-| 7 | P0-G/H/I/J | clean-up |
-| 8 | P2 Lint 排程 | 需 scheduler |
-| 9 | P3 進階 | 規模未到 |
+| 1 | P2 #4 Lint 自動排程 | TODO（需 background scheduler） |
+| 2 | P3 #5 Lint + Web Search | TODO（依賴 #4） |
+| 3 | P3 #6 Typed Relationships | 規模未到（500+ 頁才需要） |
+
+P0 A-J + P1 #1-3 已在 v0.4.6 / v0.4.7 完成。
 
 ---
 

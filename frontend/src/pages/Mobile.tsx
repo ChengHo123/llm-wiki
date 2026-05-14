@@ -6,12 +6,15 @@ import remarkGfm from 'remark-gfm'
 import {
   Upload, FileText, CheckCircle, XCircle, Clock, RefreshCw, Trash2, RotateCcw,
   Network, ArrowLeft, LogOut, BookOpen, ChevronRight,
+  AlertTriangle, Wand2, Loader2, X,
 } from 'lucide-react'
 import {
   uploadDocument, listDocuments, deleteDocument, retryDocument,
   getStoredApiKey, clearStoredApiKey, getActiveKeyName,
   getWikiGraph, listWikiPages, getWikiPage, deleteWikiPage,
+  lintWiki, applyLintFixes,
   type Document, type GraphData, type WikiPageSummary, type WikiPageDetail,
+  type LintIssue,
 } from '../api/client'
 
 const STATUS_ICON: Record<string, JSX.Element> = {
@@ -174,6 +177,18 @@ function WikiListView({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState('')
+  const [linting, setLinting] = useState(false)
+  const [lintReport, setLintReport] = useState<any>(null)
+  const [applying, setApplying] = useState<number | 'all' | null>(null)
+  const [applyResult, setApplyResult] = useState<{ applied: number; skipped: number } | null>(null)
+
+  const reloadPages = async () => {
+    try {
+      setPages(await listWikiPages())
+    } catch {
+      setError('載入失敗')
+    }
+  }
 
   useEffect(() => {
     let alive = true
@@ -184,6 +199,53 @@ function WikiListView({
       .finally(() => alive && setLoading(false))
     return () => { alive = false }
   }, [])
+
+  const handleLint = async () => {
+    if (linting) return
+    setLinting(true)
+    setApplyResult(null)
+    setError('')
+    try {
+      const report = await lintWiki()
+      setLintReport(report)
+    } catch {
+      setError('Lint 執行失敗')
+    } finally {
+      setLinting(false)
+    }
+  }
+
+  const runApply = async (issues: LintIssue[], key: number | 'all') => {
+    if (applying !== null) return
+    setApplying(key)
+    setApplyResult(null)
+    try {
+      const result = await applyLintFixes(issues)
+      const applied = result.applied?.length || 0
+      const skipped = result.skipped?.length || 0
+      setApplyResult({ applied, skipped })
+      if (key === 'all') {
+        setLintReport(null)
+      } else if (lintReport?.issues) {
+        setLintReport({
+          ...lintReport,
+          issues: lintReport.issues.filter((_: any, i: number) => i !== key),
+          stats: { ...lintReport.stats, issues_found: Math.max(0, (lintReport.stats?.issues_found || 1) - 1) },
+        })
+      }
+      await reloadPages()
+    } catch {
+      setError('套用失敗')
+    } finally {
+      setApplying(null)
+    }
+  }
+
+  const handleApplyAll = () => {
+    if (!lintReport?.issues?.length) return
+    if (!confirm(`將對 ${lintReport.issues.length} 個 issue 呼叫 LLM 改寫對應頁面，原內容會被覆寫。確定？`)) return
+    runApply(lintReport.issues as LintIssue[], 'all')
+  }
 
   const filtered = filter.trim()
     ? pages.filter((p) => p.title.toLowerCase().includes(filter.toLowerCase()))
@@ -196,7 +258,15 @@ function WikiListView({
           <ArrowLeft size={20} />
         </button>
         <h1 className="font-semibold text-gray-800 dark:text-zinc-100">Wiki 頁面</h1>
-        <span className="text-xs text-gray-400 dark:text-zinc-500 ml-auto">{pages.length} 頁</span>
+        <span className="text-xs text-gray-400 dark:text-zinc-500 ml-2">{pages.length} 頁</span>
+        <button
+          onClick={handleLint}
+          disabled={linting}
+          className="ml-auto flex items-center gap-1.5 text-xs bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 px-2.5 py-1.5 rounded-lg active:bg-amber-100 dark:active:bg-amber-900 disabled:opacity-50"
+        >
+          {linting ? <RefreshCw size={12} className="animate-spin" /> : <AlertTriangle size={12} />}
+          健檢
+        </button>
       </header>
 
       <div className="px-4 py-3 bg-white dark:bg-zinc-900 border-b border-gray-100 dark:border-zinc-800 shrink-0">
@@ -209,6 +279,73 @@ function WikiListView({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
+        {applyResult && (
+          <div className="mb-3 text-xs text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-xl px-3 py-2 flex items-center gap-2">
+            <CheckCircle size={14} />
+            已套用 {applyResult.applied} 頁{applyResult.skipped > 0 ? `，略過 ${applyResult.skipped}` : ''}
+            <button onClick={() => setApplyResult(null)} className="ml-auto text-green-700 dark:text-green-400">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {lintReport && (
+          <div className="mb-3 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-2xl p-3">
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-300">健檢報告</h3>
+              <button onClick={() => setLintReport(null)} className="text-amber-700 dark:text-amber-400 -mr-1 -mt-1 p-1">
+                <X size={14} />
+              </button>
+            </div>
+            {lintReport.summary && (
+              <p className="text-xs text-amber-700 dark:text-amber-400 mb-2">{lintReport.summary}</p>
+            )}
+            <div className="flex gap-3 text-[10px] text-amber-600 dark:text-amber-500 mb-2">
+              <span>頁數 {lintReport.stats?.total_pages ?? '-'}</span>
+              <span>孤立 {lintReport.stats?.orphan_pages ?? '-'}</span>
+              <span>問題 {lintReport.stats?.issues_found ?? 0}</span>
+            </div>
+            {lintReport.issues?.length > 0 && (
+              <>
+                <button
+                  onClick={handleApplyAll}
+                  disabled={applying !== null}
+                  className="w-full mb-2 flex items-center justify-center gap-1.5 text-xs bg-amber-600 text-white px-3 py-2 rounded-lg active:bg-amber-700 disabled:opacity-50"
+                >
+                  {applying === 'all' ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                  自動修復全部 {lintReport.issues.length} 個
+                </button>
+                <ul className="space-y-2 max-h-72 overflow-y-auto">
+                  {lintReport.issues.map((issue: any, i: number) => (
+                    <li key={i} className="text-[11px] bg-white dark:bg-zinc-900 rounded-lg p-2 border border-amber-200 dark:border-amber-800">
+                      <div className="flex items-center gap-1 mb-1 flex-wrap">
+                        <span className={`font-medium ${issue.severity === 'high' ? 'text-red-600 dark:text-red-400' : issue.severity === 'medium' ? 'text-orange-600 dark:text-orange-400' : 'text-yellow-600 dark:text-yellow-400'}`}>
+                          [{issue.severity}]
+                        </span>
+                        <span className="text-gray-400 dark:text-zinc-500 truncate">{issue.page_slug}</span>
+                      </div>
+                      <p className="text-gray-700 dark:text-zinc-300 leading-snug">{issue.description}</p>
+                      {issue.suggestion && (
+                        <p className="text-gray-500 dark:text-zinc-400 mt-1 leading-snug">建議：{issue.suggestion}</p>
+                      )}
+                      {issue.page_slug && (
+                        <button
+                          onClick={() => runApply([issue as LintIssue], i)}
+                          disabled={applying !== null}
+                          className="mt-2 flex items-center gap-1 text-[10px] border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 px-2 py-1 rounded active:bg-amber-100 dark:active:bg-amber-900 disabled:opacity-50"
+                        >
+                          {applying === i ? <Loader2 size={10} className="animate-spin" /> : <Wand2 size={10} />}
+                          套用此建議
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        )}
+
         {loading ? (
           <div className="flex justify-center py-16">
             <RefreshCw size={24} className="animate-spin text-gray-400 dark:text-zinc-500" />
