@@ -287,6 +287,74 @@ def build_existing_wiki_context(pages: list) -> str:
     return "\n".join(lines)
 
 
+def normalize_markdown(text: str) -> str:
+    """修補 LLM 常見 markdown 格式 bug：把 inline 的 `## `、`* `、`1. ` 等區塊符號前面補換行，
+    避免 ReactMarkdown 把整段當純文字呈現。
+
+    策略：
+    - heading `## ` 直接補換行（## 不會在 inline 用法出現）
+    - bullet / number list：line-by-line 偵測，若一行含 ≥2 個 `* ` 或 `1. ` 之類的 pattern，
+      視為「LLM 把整段 list 擠成一行」，逐個拆分。單一 `* ` 不拆，避免破壞 *italic*。
+    """
+    if not text:
+        return text
+    # 1) headings：## / ### / #### 前若沒換行就補
+    text = re.sub(r"(?<=[^\n])\s*(#{1,6}\s)", r"\n\n\1", text)
+
+    out_lines = []
+    bullet_pattern = re.compile(r"(?:(?<=^)|(?<=[^\n*]))\*\s+")
+    number_pattern = re.compile(r"(?:(?<=^)|(?<=[^\n]))\d+\.\s+")
+    heading_line = re.compile(r"^#{1,6}\s")
+    for line in text.split("\n"):
+        bullet_hits = len(bullet_pattern.findall(line))
+        number_hits = len(number_pattern.findall(line))
+        is_heading = bool(heading_line.match(line))
+        # heading 那行內若混入 `* ` 一律拆；其他行需要 ≥2 個 `* ` 才視為 list
+        if is_heading and bullet_hits >= 1:
+            line = re.sub(r"(?<=[^\n*])\s*(\*\s+)", r"\n\1", line)
+        elif bullet_hits >= 2:
+            line = re.sub(r"(?<=[^\n*])\s*(\*\s+)", r"\n\1", line)
+        if number_hits >= 2:
+            line = re.sub(r"(?<=[^\n])\s+(\d+\.\s)", r"\n\1", line)
+        out_lines.append(line)
+    text = "\n".join(out_lines)
+
+    # 3) 連續 3 個以上換行縮成 2
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def infer_intra_doc_links(pages: list[dict], slug_set: set[str]) -> dict[str, set[str]]:
+    """LLM 經常忘記填 links_to。掃描每頁 content，找出本批其他頁面的 title / slug 出現過的地方，
+    自動補成連結。回傳 {source_slug: {target_slug, ...}}。
+    """
+    title_to_slug: dict[str, str] = {}
+    for p in pages:
+        t = (p.get("title") or "").strip()
+        s = (p.get("slug") or slugify(t)).strip()
+        if t and s:
+            title_to_slug[t] = s
+
+    inferred: dict[str, set[str]] = {}
+    for p in pages:
+        src_slug = (p.get("slug") or slugify(p.get("title") or "")).strip()
+        if not src_slug:
+            continue
+        hay = (p.get("content") or "") + "\n" + (p.get("summary") or "")
+        targets = set()
+        for title, slug in title_to_slug.items():
+            if slug == src_slug:
+                continue
+            if slug not in slug_set:
+                continue
+            # 完整 title 出現在內容裡，且不只是字串中的單一字
+            if len(title) >= 2 and title in hay:
+                targets.add(slug)
+        if targets:
+            inferred[src_slug] = targets
+    return inferred
+
+
 def slugify(title: str) -> str:
     slug = re.sub(r"[^\w\s-]", "", title.lower())
     slug = re.sub(r"[\s_]+", "-", slug)
@@ -442,8 +510,10 @@ async def _apply_ingest_result(
         )
         wiki_page = existing.scalar_one_or_none()
 
+        normalized_content = normalize_markdown(page_data.get("content", ""))
+
         if wiki_page:
-            wiki_page.content = page_data.get("content", "")
+            wiki_page.content = normalized_content
             wiki_page.title = title
             wiki_page.page_type = page_data.get("page_type", "concept")
             wiki_page.summary = page_data.get("summary", "") or wiki_page.summary
@@ -455,7 +525,7 @@ async def _apply_ingest_result(
                 source_document_id=doc_id,
                 title=title,
                 slug=slug,
-                content=page_data.get("content", ""),
+                content=normalized_content,
                 page_type=page_data.get("page_type", "concept"),
                 summary=page_data.get("summary", ""),
             )
@@ -478,7 +548,12 @@ async def _apply_ingest_result(
 
     slug_to_id_all = {**existing_slugs, **slug_to_id}
 
-    for page_data in data.get("pages", []):
+    # 強制保底：LLM 經常忘填 links_to，掃 content 推論本批內互相提及的連結，
+    # 再 union 進 LLM 給的 links_to。
+    pages_list = data.get("pages", []) or []
+    inferred_links = infer_intra_doc_links(pages_list, set(slug_to_id.keys()))
+
+    for page_data in pages_list:
         source_slug = page_data.get("slug") or slugify(page_data["title"])
         source_id = slug_to_id.get(source_slug)
         if not source_id:
@@ -490,10 +565,15 @@ async def _apply_ingest_result(
         for link in old_links.scalars():
             await db.delete(link)
 
-        for target_slug in page_data.get("links_to", []):
+        target_slugs = set(page_data.get("links_to", []) or [])
+        target_slugs |= inferred_links.get(source_slug, set())
+
+        seen_targets: set = set()
+        for target_slug in target_slugs:
             target_id = slug_to_id_all.get(target_slug)
-            if target_id and target_id != source_id:
+            if target_id and target_id != source_id and target_id not in seen_targets:
                 db.add(WikiLink(source_page_id=source_id, target_page_id=target_id))
+                seen_targets.add(target_id)
 
     return pages_created
 
@@ -592,13 +672,38 @@ async def run_ingest(document_id: uuid.UUID) -> None:
                 prefix = f"{existing_context}\n\n" if existing_context else ""
                 source_hint = "（圖片內容已轉文字）" if is_image else ""
                 user_content = f"{prefix}文件名稱: {doc.filename}{source_hint}\n\n{full_text}"
-                single_result: IngestResult = await structured_call(
-                    schema=IngestResult,
-                    system=INGEST_SYSTEM_PROMPT,
-                    user=user_content,
-                    max_tokens=32768,
-                )
-                data = single_result.model_dump()
+
+                try:
+                    single_result: IngestResult = await structured_call(
+                        schema=IngestResult,
+                        system=INGEST_SYSTEM_PROMPT,
+                        user=user_content,
+                        max_tokens=32768,
+                    )
+                    data = single_result.model_dump()
+                    if not data.get("pages"):
+                        raise ValueError("structured_call returned no pages")
+                except Exception as e:
+                    # 結構化失敗或回空頁：不要讓 vision 抽出的內容白白丟掉，
+                    # 退回保底——把 full_text 整段當一個 stub 頁面存進來，使用者至少看得到內容。
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "structured_call failed/empty for doc %s; saving stub page: %s",
+                        doc.id, e,
+                    )
+                    stub_title = Path(doc.filename).stem or doc.filename or "未命名"
+                    data = {
+                        "pages": [{
+                            "title": stub_title,
+                            "slug": slugify(stub_title),
+                            "page_type": "summary",
+                            "summary": (full_text or "").strip().replace("\n", " ")[:150]
+                                or "（內容尚未結構化）",
+                            "content": full_text or "（無內容）",
+                            "links_to": [],
+                        }],
+                        "summary": f"自動 fallback：{stub_title}",
+                    }
                 doc_summary = data.get("summary", "")
                 all_pages_created = await _apply_ingest_result(
                     db, doc.id, doc.api_key_id, data,

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Users, LogOut, RefreshCw, MessageCircle, FileText, Activity, BarChart3, UserCheck, BookOpen } from 'lucide-react'
-import { adminListUsers, adminLogout, adminBackfillLineNames, adminBackfillWikiSummaries, type AdminUserSummary } from '../api/client'
+import { Users, LogOut, RefreshCw, MessageCircle, FileText, Activity, BarChart3, UserCheck, BookOpen, Wrench } from 'lucide-react'
+import { adminListUsers, adminLogout, adminBackfillLineNames, adminBackfillWikiSummaries, adminFixExistingWiki, type AdminUserSummary } from '../api/client'
 import ThemeToggle from '../components/ThemeToggle'
 
 export default function AdminUsers() {
@@ -72,6 +72,21 @@ export default function AdminUsers() {
     }
   }
 
+  const [fixingWiki, setFixingWiki] = useState(false)
+  const handleFixWiki = async () => {
+    if (fixingWiki) return
+    if (!confirm('將對既有 wiki 套用 markdown 正規化 + 自動補同文件內連結（不會呼叫 LLM）。確定？')) return
+    setFixingWiki(true)
+    try {
+      const r = await adminFixExistingWiki()
+      alert(`掃描 ${r.pages_scanned} 頁，內文重排 ${r.content_rewritten}，新增連結 ${r.links_added}`)
+    } catch (e: any) {
+      alert(e.response?.data?.detail || '修復失敗')
+    } finally {
+      setFixingWiki(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 p-6">
       <div className="max-w-6xl mx-auto">
@@ -122,6 +137,18 @@ export default function AdminUsers() {
               title="補抓 wiki page summary（一次性）"
             >
               <BookOpen size={15} className={backfillingSummaries ? 'animate-pulse' : ''} />
+            </button>
+            <button
+              onClick={handleFixWiki}
+              disabled={fixingWiki}
+              className="text-zinc-500 dark:text-zinc-400
+                         hover:text-zinc-900 dark:hover:text-zinc-100
+                         hover:bg-zinc-100 dark:hover:bg-zinc-800
+                         disabled:opacity-50 disabled:cursor-not-allowed
+                         w-8 h-8 rounded-lg inline-flex items-center justify-center transition-colors"
+              title="正規化既有 wiki markdown + 補同文件內連結"
+            >
+              <Wrench size={15} className={fixingWiki ? 'animate-pulse' : ''} />
             </button>
             <button
               onClick={load}

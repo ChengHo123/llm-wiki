@@ -688,6 +688,90 @@ async def backfill_wiki_summaries(
     return BackfillResult(scanned=scanned, updated=updated, failed=failed)
 
 
+# ── Wiki markdown 正規化 + intra-doc 連結補建 ───────────
+
+
+class WikiFixResult(BaseModel):
+    pages_scanned: int
+    content_rewritten: int
+    links_added: int
+
+
+@router.post("/admin/wiki/fix-existing", response_model=WikiFixResult)
+async def fix_existing_wiki(
+    _: None = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """對既有 wiki 頁面套 v0.4.10 引入的修正：
+    1. normalize_markdown 拆出擠成一段的 ## / * / 1. 等區塊
+    2. infer_intra_doc_links 掃同文件內互相提及，自動補 wiki_links
+    """
+    from app.services.ingest import normalize_markdown, infer_intra_doc_links
+    from app.models.wiki_link import WikiLink
+
+    pages = (
+        await db.execute(select(WikiPage).order_by(WikiPage.api_key_id, WikiPage.source_document_id))
+    ).scalars().all()
+
+    content_rewritten = 0
+    for p in pages:
+        old = p.content or ""
+        new = normalize_markdown(old)
+        if new and new != old:
+            p.content = new
+            content_rewritten += 1
+
+    # 以 (api_key_id, source_document_id) 分組做 intra-doc 連結推論
+    from collections import defaultdict
+    groups: dict[tuple, list] = defaultdict(list)
+    for p in pages:
+        if p.source_document_id is None:
+            continue
+        groups[(p.api_key_id, p.source_document_id)].append(p)
+
+    links_added = 0
+    for (api_key_id, doc_id), group in groups.items():
+        if len(group) < 2:
+            continue
+        page_dicts = [
+            {"title": p.title, "slug": p.slug, "content": p.content or "", "summary": p.summary or ""}
+            for p in group
+        ]
+        slug_set = {p.slug for p in group}
+        inferred = infer_intra_doc_links(page_dicts, slug_set)
+        slug_to_id = {p.slug: p.id for p in group}
+
+        # 載入既有連結，避免重複
+        existing_pairs = set()
+        existing_rows = await db.execute(
+            select(WikiLink).where(WikiLink.source_page_id.in_(slug_to_id.values()))
+        )
+        for row in existing_rows.scalars():
+            existing_pairs.add((row.source_page_id, row.target_page_id))
+
+        for src_slug, target_slugs in inferred.items():
+            src_id = slug_to_id.get(src_slug)
+            if not src_id:
+                continue
+            for tgt_slug in target_slugs:
+                tgt_id = slug_to_id.get(tgt_slug)
+                if not tgt_id or tgt_id == src_id:
+                    continue
+                if (src_id, tgt_id) in existing_pairs:
+                    continue
+                db.add(WikiLink(source_page_id=src_id, target_page_id=tgt_id))
+                existing_pairs.add((src_id, tgt_id))
+                links_added += 1
+
+    await db.commit()
+
+    return WikiFixResult(
+        pages_scanned=len(pages),
+        content_rewritten=content_rewritten,
+        links_added=links_added,
+    )
+
+
 # ── Document control（admin 跨 user 重試）─────────────
 
 
