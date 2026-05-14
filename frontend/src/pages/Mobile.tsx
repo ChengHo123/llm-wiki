@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Upload, FileText, CheckCircle, XCircle, Clock, RefreshCw, Trash2, RotateCcw,
-  Network, ArrowLeft, LogOut, BookOpen, ChevronRight,
+  Network, ArrowLeft, LogOut, BookOpen, ChevronRight, ChevronLeft,
   AlertTriangle, Wand2, Loader2, X,
 } from 'lucide-react'
 import {
@@ -501,6 +501,38 @@ function WikiDetailView({
                 {renderContent(page.content)}
               </ReactMarkdown>
             </div>
+
+            {(() => {
+              const idx = allPages.findIndex((p) => p.id === page.id)
+              const prev = idx > 0 ? allPages[idx - 1] : null
+              const next = idx >= 0 && idx < allPages.length - 1 ? allPages[idx + 1] : null
+              return (
+                <nav className="mt-6 flex gap-2">
+                  <button
+                    onClick={() => prev && onOpenPage(prev.id)}
+                    disabled={!prev}
+                    className="flex-1 min-w-0 flex items-center gap-2 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-2xl px-3 py-2.5 text-left active:bg-gray-50 dark:active:bg-zinc-800 disabled:opacity-40 disabled:active:bg-transparent"
+                  >
+                    <ChevronLeft size={16} className="text-gray-400 dark:text-zinc-500 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] text-gray-400 dark:text-zinc-500">上一頁</div>
+                      <div className="text-xs text-gray-800 dark:text-zinc-200 truncate">{prev?.title || '—'}</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => next && onOpenPage(next.id)}
+                    disabled={!next}
+                    className="flex-1 min-w-0 flex items-center gap-2 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-2xl px-3 py-2.5 text-right active:bg-gray-50 dark:active:bg-zinc-800 disabled:opacity-40 disabled:active:bg-transparent"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] text-gray-400 dark:text-zinc-500">下一頁</div>
+                      <div className="text-xs text-gray-800 dark:text-zinc-200 truncate">{next?.title || '—'}</div>
+                    </div>
+                    <ChevronRight size={16} className="text-gray-400 dark:text-zinc-500 flex-shrink-0" />
+                  </button>
+                </nav>
+              )
+            })()}
           </article>
         )}
       </div>

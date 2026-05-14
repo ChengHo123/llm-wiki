@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { BookOpen, ChevronLeft, AlertTriangle, RefreshCw, Trash2, Wand2, Loader2 } from 'lucide-react'
+import { BookOpen, ChevronLeft, ChevronRight, AlertTriangle, RefreshCw, Trash2, Wand2, Loader2 } from 'lucide-react'
 import { listWikiPages, getWikiPage, lintWiki, deleteWikiPage, applyLintFixes, type WikiPageSummary, type WikiPageDetail, type LintIssue } from '../api/client'
 
 const PAGE_TYPE_COLOR: Record<string, string> = {
@@ -113,6 +113,37 @@ export default function WikiPage() {
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.content}</ReactMarkdown>
         </div>
         <p className="text-xs text-gray-400 dark:text-zinc-500 mt-3">最後更新：{new Date(selected.updated_at).toLocaleString('zh-TW')}</p>
+        {(() => {
+          const idx = pages.findIndex((p) => p.id === selected.id)
+          const prev = idx > 0 ? pages[idx - 1] : null
+          const next = idx >= 0 && idx < pages.length - 1 ? pages[idx + 1] : null
+          return (
+            <nav className="mt-6 flex gap-3">
+              <button
+                onClick={() => prev && openPage(prev.id)}
+                disabled={!prev}
+                className="flex-1 flex items-center gap-2 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-xl px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+              >
+                <ChevronLeft size={18} className="text-gray-400 dark:text-zinc-500 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-gray-400 dark:text-zinc-500">上一頁</div>
+                  <div className="text-sm text-gray-800 dark:text-zinc-200 truncate">{prev?.title || '—'}</div>
+                </div>
+              </button>
+              <button
+                onClick={() => next && openPage(next.id)}
+                disabled={!next}
+                className="flex-1 flex items-center gap-2 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-xl px-4 py-3 text-right hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-gray-400 dark:text-zinc-500">下一頁</div>
+                  <div className="text-sm text-gray-800 dark:text-zinc-200 truncate">{next?.title || '—'}</div>
+                </div>
+                <ChevronRight size={18} className="text-gray-400 dark:text-zinc-500 flex-shrink-0" />
+              </button>
+            </nav>
+          )
+        })()}
       </div>
     )
   }

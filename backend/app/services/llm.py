@@ -277,85 +277,50 @@ def encode_image_b64(file_path: str) -> tuple[str, str]:
     return data, "image/jpeg"
 
 
-async def vision_structured_call(
-    schema: Type[T],
-    system: str,
-    user_content: list,
-    max_tokens: int = 16384,
-) -> T:
-    """Vision model 結構化呼叫。直接走 OpenAI client，保留 multimodal content。
-    Pass 1：function call；Pass 2：JSON prompt + 手動 parse。
-    兩段都帶 user 標籤，後台可歸戶。
+VISION_EXTRACT_PROMPT = """你是 OCR + 視覺描述助手。
+只做一件事：把圖片裡所有可見資訊忠實轉成純文字。
+
+規則：
+- 文字部分逐字輸出（保留原語言，不翻譯）
+- 表格 → 用 Markdown 表格表示
+- 圖示/流程圖/插圖 → 用文字描述出來（位置、元素、彼此關係）
+- 重點是「完整保留資訊」，不要做摘要、不要評論、不要省略
+- 如果是手寫字，盡量辨識；認不出的標 [字跡不清]
+- 純輸出抽取結果，不要加任何前後綴解釋
+"""
+
+
+async def vision_extract_text(image_path: str) -> str:
+    """單一職責：把圖片內容轉成純文字描述，不做任何結構化。
+    後續所有 wiki 化邏輯都交給普通 structured_call 處理，
+    讓圖片和 PDF 走同一條 pipeline、套用同一份 INGEST_SYSTEM_PROMPT 規則。
     """
-    tool = _pydantic_to_tool(schema)
-    tool_name = tool["function"]["name"]
-
-    # Pass 1: function calling with multimodal content
-    try:
-        response = await client.chat.completions.create(
-            model=settings.VISION_MODEL,
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ],
-            tools=[tool],
-            tool_choice={"type": "function", "function": {"name": tool_name}},
-            **_user_kwargs(),
-        )
-        msg = response.choices[0].message
-        if msg.tool_calls:
-            args_str = msg.tool_calls[0].function.arguments
-            try:
-                data = json.loads(args_str)
-                return schema.model_validate(data)
-            except (json.JSONDecodeError, ValidationError) as e:
-                logger.warning("vision tool_call parse failed: %s; args preview: %s", e, args_str[:300])
-        else:
-            logger.warning(
-                "vision function_calling returned no tool call; raw preview: %s",
-                str(msg.content or "")[:300],
-            )
-    except Exception as e:
-        logger.warning("vision function_calling path failed: %s", e)
-
-    # Pass 2: JSON prompt + 手動 parse，保留 multimodal content（繞過 _flatten_content）
-    fallback_system = (
-        f"{system}\n\n"
-        "請嚴格以 JSON 回傳，符合以下 schema，不要加任何前後文字、不要解釋、不要加 markdown code fence：\n"
-        f"{json.dumps(schema.model_json_schema(), ensure_ascii=False)}\n\n"
-        "回傳格式範例：{\"pages\": [...], \"summary\": \"...\"}\n"
-        "直接以 { 開頭、以 } 結尾。"
-    )
-    resp = await client.chat.completions.create(
+    data, media_type = encode_image_b64(image_path)
+    response = await client.chat.completions.create(
         model=settings.VISION_MODEL,
+        max_tokens=8192,
         messages=[
-            {"role": "system", "content": fallback_system},
-            {"role": "user", "content": user_content},
+            {"role": "system", "content": VISION_EXTRACT_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media_type};base64,{data}"},
+                    },
+                    {
+                        "type": "text",
+                        "text": "請把這張圖中的所有資訊忠實轉成純文字。",
+                    },
+                ],
+            },
         ],
-        max_tokens=max_tokens,
         **_user_kwargs(),
     )
-    raw_text = _strip_think(resp.choices[0].message.content or "")
-    obj_str = _extract_json_obj(raw_text)
-    if obj_str:
-        try:
-            data = json.loads(obj_str)
-            return schema.model_validate(data)
-        except (json.JSONDecodeError, ValidationError) as e:
-            logger.warning("vision pass2 parse failed: %s", e)
-
-    # Pass 3: vision model 無法產 JSON，用它輸出的純文字交給普通 LLM 結構化
-    if raw_text.strip():
-        logger.warning("vision pass2 no JSON; falling back to text→structured_call")
-        return await structured_call(
-            schema=schema,
-            system=system,
-            user=f"[以下是從圖片中提取的文字內容，請依指示整理成 wiki 頁面]\n\n{raw_text}",
-            max_tokens=max_tokens,
-        )
-
-    raise ValueError(f"vision model 無 JSON output. preview: {raw_text[:300]}")
+    text = _strip_think(response.choices[0].message.content or "")
+    if not text.strip():
+        raise ValueError("vision model returned empty extraction")
+    return text
 
 
 def build_document_message(file_path: str, text_content: str | None = None) -> dict:

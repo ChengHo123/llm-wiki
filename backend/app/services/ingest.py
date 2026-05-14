@@ -14,7 +14,7 @@ from app.models.wiki_page import WikiPage
 from app.models.wiki_page_source import WikiPageSource
 from app.models.wiki_link import WikiLink
 from app.models.activity_log import ActivityLog
-from app.services.llm import structured_call, vision_structured_call, build_document_message
+from app.services.llm import structured_call, vision_extract_text
 from app.core.config import get_settings
 from app.core.end_user import current_end_user, line_tag, web_tag
 from app.models.line_user_binding import LineUserBinding
@@ -106,51 +106,31 @@ INGEST_SYSTEM_PROMPT = """你是一個知識整理助手，負責將文件內容
   "summary": "一段簡短的文件摘要"
 }
 
-規則：
-- 頁數依文件內容量決定：薄文件 5~10 頁，厚文件 15~30 頁以上
-- page_type: summary=文件摘要, entity=人名/組織/產品, concept=概念/技術, index=索引頁
+產出規則：
+- 頁數依內容量決定：薄文件 5~10 頁、厚文件 15~30 頁
+- 每份文件最多 1~2 個 summary 頁；其餘是 entity（人/組織/產品）或 concept（概念/技術/方法）
+- 一頁一主題：A 和 B 是不同實體就拆 2 頁，再用 [[B]] 互連
+- 同類 entity/concept ≥3 個時，多建 1 個 index 頁當入口
 
-【page_type 分布硬性規則】
-- **不可以整份只丟 summary 頁**。summary 是「整份文件摘要」，每份文件最多 1~2 個 summary 頁
-- 必須抽出至少 3 個以上的 entity 或 concept 頁（除非文件內容真的空到不行）
-- 文件中出現的每個獨立的人名/組織/產品/品牌 → entity 頁
-- 文件中出現的每個獨立的概念/方法/技術/原則 → concept 頁
-- 一張圖片就算只有幾行字，只要有可辨識的實體或概念都要拆出來。寧可拆細，不要塞在 summary 裡
+content 欄位（重點）：
+- **本頁是 wiki 的肉**，要寫成可獨立閱讀的完整段落：原文細節、引用、上下文都要保留
+- 不准只放標題、只寫一句話、只列分類
+- 每頁 200~500 字實質內容是常態。短於此通常代表偷工
+- content 內用 [[標題]] 標記交叉連結
 
-【一頁一主題】
-- 一頁就講一個明確的實體或概念，不要把多個獨立主題塞同一頁
-- 若一頁需要同時介紹 A、B、C 三個獨立概念 → 拆成 3 頁，再各自加 [[]] 互相連結
-- 範例：一張投影片講「Apple 的歷史與 iPhone 產品線」→ 拆 [Apple], [iPhone], 兩者互連，不要混在一頁
-
-【summary 欄位是 query 的核心索引】
-- 系統會用 summary 當搜尋進入點，summary 不夠精準會直接導致該頁被漏掉
-- summary 必須包含：本頁主題的關鍵詞、核心實體/概念、與相鄰主題的關係
-- 不可只重述 title。範例：
-  - 差：「介紹 NVIDIA 公司」
-  - 好：「NVIDIA 是 GPU 設計商，旗下 H100、A100 用於 AI 訓練；與 [[CUDA]]、[[GeForce]] 為核心產品線」
+summary 欄位：
 - 1-2 句、最多 150 字
+- 必須包含本頁的關鍵實體/概念與相鄰主題的關係，不可重述 title
+- 這是搜尋進入點，寫不好整頁會被漏掉
 
-【links_to 要積極建立（重要）】
-- 系統靠 wiki_links 在 query 時擴展鄰居頁面：**沒 link 的頁面在搜尋時等於孤兒**
-- 規則：只要本頁主題和其他頁有任何明確關聯，就一定要連
-- 連結來源：(a) 本次 pages 列表內的 title，或 (b) <existing_wiki> 區塊內已存在的 slug/title
-- 嚴禁自創不存在的頁面名
+links_to 欄位：
+- 只要和其他頁有任何明確關聯就一定要連，沒 link 等於 query 時的孤兒
+- 只可指向：本次 pages 列表內的 title，或 <existing_wiki> 區塊已存在的 slug/title
+- 不准自創不存在的頁面名
 
-【鼓勵建立 index 頁】
-- 文件主題下，若有 3 個以上同類 entity/concept，建一個 index 頁當入口
-- 例：講多個技術產品 → 建「產品線索引」index 頁，列 [[A]] [[B]] [[C]]
-- index 頁是 query 的優先 anchor，高 fan-out 能讓鄰居展開更多頁面
-
-【其他規則】
-- 使用 [[標題]] 語法在 content 中標記頁面間的交叉連結
-- slug 只使用英文小寫、數字、連字號
-- content 使用 Markdown 格式，要有實質內容，不要只寫標題
-
-【跨文件連結規則】
-- 若提供 <existing_wiki> 區塊，代表知識庫已有頁面
-- 新頁面的 links_to 可以連結到既有頁面的 slug（跨文件連結）
-- 若新文件的概念與既有頁面重複，請使用既有頁面的 slug 與 title（會自動 upsert 更新內容）
-- 不要重複建立已存在的實體/概念頁，優先補強既有頁面
+slug 與既有 wiki：
+- slug 只用英文小寫、數字、連字號
+- 若 <existing_wiki> 已有相同主題，重用既有 slug 與 title（會自動 upsert 合併），不要另起爐灶
 """
 
 
@@ -189,11 +169,11 @@ OUTLINE_MERGE_SYSTEM_PROMPT = """你正在彙整一份長文件多段局部 outl
 
 
 CHUNK_INSTRUCTION = """你正在處理大型文件的其中一段（chunk）。請注意：
-- <doc_outline> 是整份文件的全局輪廓，代表這份文件的「靈魂」，你每次只看到一段，但你產出的 wiki 頁要能融入整體
-- <existing_wiki> 是前面 chunks 已產生的頁面。遇到同樣概念請 reuse 既有 slug（會自動 upsert 合併補強內容），不要另起爐灶
-- 本 chunk 結尾可能切在段落中間，不完整的段落請忽略或略過，專注在能獨立成立的內容
-- 本 chunk 開頭可能有上一 chunk 重疊的文字，不用重複整理
-- 本次只需為此 chunk 的主題產頁面，不用硬生出 10~15 頁
+- <doc_outline> 是整份文件的全局輪廓，每塊只看到一段，但產出的 wiki 頁要能融入整體
+- <existing_wiki> 是前面 chunks 已產生的頁面。遇到同樣概念請 reuse 既有 slug（會自動 upsert 合併），不要另起爐灶
+- chunk 結尾可能切在段落中間，不完整的段落請忽略
+- chunk 開頭可能和上一 chunk 重疊，不要重複整理
+- 本 chunk 該產幾頁依本段內容決定；該段內容多就多產、少就少產，content 字數別因為「只是一塊」就縮水
 """
 
 
@@ -323,11 +303,20 @@ async def read_text_file(file_path: str) -> str:
 
 
 def extract_pdf_text(file_path: str) -> str:
+    """pypdf 抽純文字。掃描型/圖片型 PDF 會抽出極少文字，呼叫端可依長度判斷品質。"""
     try:
         from pypdf import PdfReader
         reader = PdfReader(file_path)
-        return "\n".join(p.extract_text() or "" for p in reader.pages)
-    except Exception:
+        text = "\n".join(p.extract_text() or "" for p in reader.pages)
+        import logging
+        logging.getLogger(__name__).info(
+            "extract_pdf_text: %s → %d chars, %d pages",
+            file_path, len(text), len(reader.pages),
+        )
+        return text
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("extract_pdf_text failed: %s", e)
         return ""
 
 
@@ -540,14 +529,17 @@ async def run_ingest(document_id: uuid.UUID) -> None:
             suffix = Path(doc.file_path).suffix.lower()
             is_image = suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
-            # 抽全文（PDF / 文字檔才有）；圖片走原本的 multimodal 單次 path
+            # 統一抽全文：圖片用 vision model 做 OCR + 描述，其他用 pypdf / 純文字讀檔。
+            # 抽完之後一律走同一條 structured_call pipeline，套用同一份 INGEST_SYSTEM_PROMPT 規則。
             full_text = ""
             if suffix == ".pdf":
                 full_text = extract_pdf_text(doc.file_path)
-            elif not is_image:
+            elif is_image:
+                full_text = await vision_extract_text(doc.file_path)
+            else:
                 full_text = await read_text_file(doc.file_path)
 
-            use_chunked = (not is_image) and len(full_text) > LARGE_DOC_CHAR_THRESHOLD
+            use_chunked = len(full_text) > LARGE_DOC_CHAR_THRESHOLD
 
             all_pages_created: list[dict] = []
             doc_summary = ""
@@ -590,34 +582,22 @@ async def run_ingest(document_id: uuid.UUID) -> None:
                     all_pages_created.extend(created)
                     await db.commit()
             else:
-                # 原本單次 path
+                # 統一單次 path：不分圖片/PDF/文字，都已轉成 full_text，走同一條
                 existing_result = await db.execute(
                     select(WikiPage).where(WikiPage.api_key_id == doc.api_key_id)
                 )
                 existing_pages = existing_result.scalars().all()
                 existing_context = build_existing_wiki_context(existing_pages)
 
-                if is_image:
-                    msg = build_document_message(doc.file_path)
-                    msg["content"].append({"type": "text", "text": f"文件名稱: {doc.filename}"})
-                    if existing_context:
-                        msg["content"].insert(0, {"type": "text", "text": existing_context})
-                    user_content = msg["content"]
-                    single_result: IngestResult = await vision_structured_call(
-                        schema=IngestResult,
-                        system=INGEST_SYSTEM_PROMPT,
-                        user_content=user_content,
-                        max_tokens=16384,
-                    )
-                else:
-                    prefix = f"{existing_context}\n\n" if existing_context else ""
-                    user_content = f"{prefix}文件名稱: {doc.filename}\n\n{full_text}"
-                    single_result = await structured_call(
-                        schema=IngestResult,
-                        system=INGEST_SYSTEM_PROMPT,
-                        user=user_content,
-                        max_tokens=32768,
-                    )
+                prefix = f"{existing_context}\n\n" if existing_context else ""
+                source_hint = "（圖片內容已轉文字）" if is_image else ""
+                user_content = f"{prefix}文件名稱: {doc.filename}{source_hint}\n\n{full_text}"
+                single_result: IngestResult = await structured_call(
+                    schema=IngestResult,
+                    system=INGEST_SYSTEM_PROMPT,
+                    user=user_content,
+                    max_tokens=32768,
+                )
                 data = single_result.model_dump()
                 doc_summary = data.get("summary", "")
                 all_pages_created = await _apply_ingest_result(
