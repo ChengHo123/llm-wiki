@@ -40,11 +40,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rich menu / 介紹圖片靜態目錄。LINE Flex carousel 的 imageUrl 從這裡取
-# 目錄不存在就跳過 mount，避免本機沒掛 ./src 時啟動失敗
+# Rich menu / 介紹圖片靜態目錄。LINE Flex carousel 的 imageUrl 從這裡取。
+# 目錄不存在就跳過 mount，避免本機沒掛素材目錄時啟動失敗。
+# 路徑刻意放在 /api/ 之下：production 的 frontend nginx 只 proxy /api/* 到 backend，
+# 其他路徑會落到 try_files → index.html。放 /api/ 才能讓 LINE 從 https://<DOMAIN>/api/static/menu/...
+# 抓到實際圖檔（同一條 caddy → nginx → backend 路徑）。
 _menu_dir = Path(settings.RICH_MENU_ASSETS_DIR)
 if _menu_dir.is_dir():
-    app.mount("/static/menu", StaticFiles(directory=str(_menu_dir)), name="menu")
+    app.mount("/api/static/menu", StaticFiles(directory=str(_menu_dir)), name="menu")
 
 app.include_router(auth.router, prefix="/api/v1", tags=["Auth"])
 app.include_router(documents.router, prefix="/api/v1", tags=["Documents"])

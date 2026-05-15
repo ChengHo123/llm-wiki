@@ -430,7 +430,7 @@ def _list_menu_image_urls(subdir: str) -> list[str]:
     files = sorted(
         p.name for p in asset_dir.iterdir() if p.is_file() and p.suffix.lower() in exts
     )
-    return [f"{base}/static/menu/{subdir}/{name}" for name in files]
+    return [f"{base}/api/static/menu/{subdir}/{name}" for name in files]
 
 
 async def _reply_flex_image_carousel(
