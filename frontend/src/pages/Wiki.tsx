@@ -117,31 +117,37 @@ export default function WikiPage() {
           const idx = pages.findIndex((p) => p.id === selected.id)
           const prev = idx > 0 ? pages[idx - 1] : null
           const next = idx >= 0 && idx < pages.length - 1 ? pages[idx + 1] : null
+          // viewport 固定左右切頁按鈕：滾到哪都在同一位置，不需要拉回底部
+          // 小螢幕只顯示箭頭，xl 以上有空間時加上「上/下一頁」標籤與標題
           return (
-            <nav className="mt-6 flex gap-3">
+            <>
               <button
                 onClick={() => prev && openPage(prev.id)}
                 disabled={!prev}
-                className="flex-1 flex items-center gap-2 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-xl px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+                title={prev?.title || '無上一頁'}
+                aria-label={prev ? `上一頁：${prev.title}` : '無上一頁'}
+                className="fixed left-3 top-1/2 -translate-y-1/2 z-20 flex items-center gap-2 bg-white/95 dark:bg-zinc-900/95 backdrop-blur border border-gray-200 dark:border-zinc-700 rounded-full pl-2 pr-2 xl:pr-3 py-2 shadow-sm hover:shadow-md hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition-all"
               >
-                <ChevronLeft size={18} className="text-gray-400 dark:text-zinc-500 flex-shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-gray-400 dark:text-zinc-500">上一頁</div>
+                <ChevronLeft size={18} className="text-gray-500 dark:text-zinc-400 flex-shrink-0" />
+                <div className="hidden xl:block max-w-[160px] text-left">
+                  <div className="text-[10px] leading-none text-gray-400 dark:text-zinc-500">上一頁</div>
                   <div className="text-sm text-gray-800 dark:text-zinc-200 truncate">{prev?.title || '—'}</div>
                 </div>
               </button>
               <button
                 onClick={() => next && openPage(next.id)}
                 disabled={!next}
-                className="flex-1 flex items-center gap-2 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-xl px-4 py-3 text-right hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+                title={next?.title || '無下一頁'}
+                aria-label={next ? `下一頁：${next.title}` : '無下一頁'}
+                className="fixed right-3 top-1/2 -translate-y-1/2 z-20 flex items-center gap-2 bg-white/95 dark:bg-zinc-900/95 backdrop-blur border border-gray-200 dark:border-zinc-700 rounded-full pl-2 xl:pl-3 pr-2 py-2 shadow-sm hover:shadow-md hover:bg-gray-50 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition-all"
               >
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-gray-400 dark:text-zinc-500">下一頁</div>
+                <div className="hidden xl:block max-w-[160px] text-right">
+                  <div className="text-[10px] leading-none text-gray-400 dark:text-zinc-500">下一頁</div>
                   <div className="text-sm text-gray-800 dark:text-zinc-200 truncate">{next?.title || '—'}</div>
                 </div>
-                <ChevronRight size={18} className="text-gray-400 dark:text-zinc-500 flex-shrink-0" />
+                <ChevronRight size={18} className="text-gray-500 dark:text-zinc-400 flex-shrink-0" />
               </button>
-            </nav>
+            </>
           )
         })()}
       </div>
