@@ -277,7 +277,7 @@ def encode_image_b64(file_path: str) -> tuple[str, str]:
     return data, "image/jpeg"
 
 
-VISION_EXTRACT_PROMPT = """你是 OCR + 視覺描述助手。
+VISION_EXTRACT_PROMPT = """你是圖片轉文字助手。
 只做一件事：把圖片裡所有可見資訊忠實轉成純文字。
 
 規則：
@@ -287,6 +287,8 @@ VISION_EXTRACT_PROMPT = """你是 OCR + 視覺描述助手。
 - 重點是「完整保留資訊」，不要做摘要、不要評論、不要省略
 - 如果是手寫字，盡量辨識；認不出的標 [字跡不清]
 - 純輸出抽取結果，不要加任何前後綴解釋
+- 絕對不要提到「OCR」「視覺模型」「我從圖片辨識到」「以下是抽取結果」等任何描述抽取過程或所用技術的字句。
+  直接輸出內容本身，當作這就是文件原文。
 """
 
 
@@ -323,45 +325,3 @@ async def vision_extract_text(image_path: str) -> str:
     return text
 
 
-def build_document_message(file_path: str, text_content: str | None = None) -> dict:
-    """依檔案類型建立 OpenAI spec 的 message"""
-    suffix = Path(file_path).suffix.lower()
-
-    if suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
-        data, media_type = encode_image_b64(file_path)
-        return {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{media_type};base64,{data}"},
-                },
-                {
-                    "type": "text",
-                    "text": (
-                        "請把這張圖片當成一份文件處理：\n"
-                        "1. 先做 OCR：完整、原樣抽出圖片中所有可見文字（含標題、段落、表格、欄位、註解、圖說、手寫字），保留原本順序與層級。表格用 Markdown 表格還原。\n"
-                        "2. 再描述視覺資訊：圖表、流程圖、示意圖、人物動作、場景重點、關鍵物件。\n"
-                        "3. 把以上內容當作這份文件的『正文』，依此產生 wiki 頁面，不要只回答『這是一張圖片』或泛泛描述。\n"
-                        "4. 若圖片完全沒有文字，至少抽出主題、實體、概念，仍需產生有實質內容的 wiki 頁面。"
-                    ),
-                },
-            ],
-        }
-    elif suffix == ".pdf":
-        # PDF 先用 pypdf 抽文字，再以文字傳入
-        try:
-            from pypdf import PdfReader
-            reader = PdfReader(file_path)
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        except Exception:
-            text = "(PDF 解析失敗)"
-        return {
-            "role": "user",
-            "content": f"以下是 PDF 文件內容：\n\n{text}",
-        }
-    else:
-        return {
-            "role": "user",
-            "content": text_content or "",
-        }

@@ -135,6 +135,10 @@ links_to 欄位：
 slug 與既有 wiki：
 - slug 只用英文小寫、數字、連字號
 - 若 <existing_wiki> 已有相同主題，重用既有 slug 與 title（會自動 upsert 合併），不要另起爐灶
+
+絕對禁止：
+- 不要在 content / summary / title 提到資料的處理過程或所用技術。包括但不限於：「OCR」「視覺模型」「圖片轉文字」「LLM 抽取」「PDF 解析」「來自掃描檔」「根據附圖」等
+- wiki 內容只描述「事物本身」，不描述「資料怎麼來」。當作 source 就是純文字原文寫的
 """
 
 
