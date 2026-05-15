@@ -60,6 +60,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       LINE_USER_COOLDOWN_SECONDS: ${LINE_USER_COOLDOWN_SECONDS:-5}
       LINE_USER_RPM_LIMIT: ${LINE_USER_RPM_LIMIT:-5}
+      PUBLIC_BACKEND_URL: ${PUBLIC_BACKEND_URL:-https://${DOMAIN}}
     volumes:
       - uploads:/app/uploads
     depends_on:
