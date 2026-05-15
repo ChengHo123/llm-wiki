@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -79,6 +79,34 @@ export default function GraphPage() {
   const handleZoomOut = () => fgRef.current?.zoom(0.7, 400)
   const handleFit = () => fgRef.current?.zoomToFit(400, 40)
 
+  // 物理參數調強：節點之間排斥力大、連線距離長 → 自然散開，
+  // 減少標籤重疊。每次 graphData 變動都套用。
+  useEffect(() => {
+    if (!graphData || !fgRef.current) return
+    const charge = fgRef.current.d3Force('charge')
+    if (charge) charge.strength(-220).distanceMax(600)
+    const link = fgRef.current.d3Force('link')
+    if (link) link.distance(80)
+    fgRef.current.d3ReheatSimulation?.()
+  }, [graphData])
+
+  // Hover focus：滑到節點時取出 1-hop 鄰居 id 集合，
+  // render 階段用來決定哪些 node / link 維持正常色、哪些淡出。
+  const linkEndpointId = (e: string | GraphNode): string =>
+    typeof e === 'string' ? e : e.id
+
+  const neighborIds = useMemo(() => {
+    if (!hoveredNode || !graphData) return new Set<string>()
+    const ids = new Set<string>()
+    for (const l of graphData.links) {
+      const s = linkEndpointId(l.source)
+      const t = linkEndpointId(l.target)
+      if (s === hoveredNode.id) ids.add(t)
+      else if (t === hoveredNode.id) ids.add(s)
+    }
+    return ids
+  }, [hoveredNode, graphData])
+
   const nodeCanvasObject = useCallback((node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const label = node.title
     const isIndex = node.page_type === 'index'
@@ -89,8 +117,13 @@ export default function GraphPage() {
     const r = Math.max(isIndex ? 10 : 6, baseR / Math.sqrt(globalScale))
     const color = PAGE_TYPE_COLOR[node.page_type] || '#6b7280'
     const isHovered = hoveredNode?.id === node.id
+    const isNeighbor = neighborIds.has(node.id)
+    const isFocused = isHovered || isNeighbor
+    // hover 模式下非聚焦節點淡出（含 index）；非 hover 模式人人正常色
+    const alpha = hoveredNode && !isFocused ? 0.15 : 1
 
     // 節點圓圈
+    ctx.globalAlpha = alpha
     ctx.beginPath()
     ctx.arc(node.x!, node.y!, r + (isHovered ? 3 : 0), 0, 2 * Math.PI)
     ctx.fillStyle = color
@@ -103,9 +136,18 @@ export default function GraphPage() {
     ctx.lineWidth = (isHovered ? 2.5 : isIndex ? 2.5 : 1.5) / globalScale
     ctx.stroke()
 
-    // 標籤（scale 夠大才顯示；index 永遠顯示）
-    if (globalScale > 0.6 || isIndex) {
-      ctx.font = `${isIndex ? 'bold ' : ''}${fontSize}px sans-serif`
+    // 標籤策略：減少視覺擁擠
+    // - index 永遠顯示（路由樞紐當地圖座標）
+    // - 在 hover focus 模式：hovered 與其鄰居都顯示
+    // - zoom 大於 1.5：所有節點顯示（使用者已主動放大）
+    // - 其他情況：非 index 不顯示，避免密密麻麻
+    const shouldShowLabel =
+      isIndex ||
+      isHovered ||
+      isNeighbor ||
+      globalScale > 1.5
+    if (shouldShowLabel) {
+      ctx.font = `${isIndex || isHovered ? 'bold ' : ''}${fontSize}px sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
       const textY = node.y! + r + 3 / globalScale
@@ -115,7 +157,8 @@ export default function GraphPage() {
       ctx.fillStyle = isHovered ? '#1d4ed8' : isIndex ? '#6b21a8' : '#374151'
       ctx.fillText(label, node.x!, textY)
     }
-  }, [hoveredNode])
+    ctx.globalAlpha = 1
+  }, [hoveredNode, neighborIds])
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -199,8 +242,19 @@ export default function GraphPage() {
             nodeLabel="title"
             nodeCanvasObject={nodeCanvasObject}
             nodeCanvasObjectMode={() => 'replace'}
-            linkColor={() => 'rgba(156,163,175,0.6)'}
-            linkWidth={1.5}
+            linkColor={(l: any) => {
+              if (!hoveredNode) return 'rgba(156,163,175,0.6)'
+              const s = typeof l.source === 'string' ? l.source : l.source?.id
+              const t = typeof l.target === 'string' ? l.target : l.target?.id
+              const connected = s === hoveredNode.id || t === hoveredNode.id
+              return connected ? 'rgba(59,130,246,0.75)' : 'rgba(156,163,175,0.1)'
+            }}
+            linkWidth={(l: any) => {
+              if (!hoveredNode) return 1.5
+              const s = typeof l.source === 'string' ? l.source : l.source?.id
+              const t = typeof l.target === 'string' ? l.target : l.target?.id
+              return s === hoveredNode.id || t === hoveredNode.id ? 2.5 : 1
+            }}
             linkDirectionalArrowLength={5}
             linkDirectionalArrowRelPos={1}
             linkCurvature={0.1}
