@@ -64,8 +64,6 @@ services:
       PUBLIC_BACKEND_URL: ${PUBLIC_BACKEND_URL:-}
     volumes:
       - uploads:/app/uploads
-      # Rich menu / 介紹圖片靜態素材；read-only 避免容器寫入
-      - ./assets/line-menu:/app/menu_assets:ro
     depends_on:
       postgres:
         condition: service_healthy

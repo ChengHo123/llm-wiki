@@ -31,7 +31,9 @@ class Settings(BaseSettings):
     # 部署時填正式網域，例如 https://api.example.com；本機開發留空時 rich menu 圖片功能會 fallback
     PUBLIC_BACKEND_URL: str = ""
 
-    # Rich menu / 介紹圖片素材目錄（容器內路徑）。docker-compose 把 host ./assets/line-menu 掛到此處
+    # Rich menu / 介紹圖片素材目錄（容器內路徑）。
+    # 素材 baked 進 backend image（backend/menu_assets → /app/menu_assets via Dockerfile COPY . .），
+    # 不再依賴 volume mount，prod / local 都自動就位。
     RICH_MENU_ASSETS_DIR: str = "/app/menu_assets"
 
     # Admin 後台帳密（單一管理員，所有 admin endpoint 共用）
