@@ -62,12 +62,14 @@ async def query_wiki(
     api_key: ApiKey = Depends(get_current_key),
     db: AsyncSession = Depends(get_db),
 ):
-    """向個人 wiki 提問（非串流）。是否存回 wiki 由系統 judge 決定，前端串流端點才會走 refine 流程。"""
+    """向個人 wiki 提問（非串流）。
+    Karpathy 模式：query 結果該複利回 wiki。是否實際存由系統 judge 把關，
+    與 /query/stream 行為一致，不再因端點差異 silently 丟掉新知識。"""
     result = await run_query(
         question=body.question,
         api_key_id=api_key.id,
         db=db,
-        save_to_wiki=False,
+        save_to_wiki=True,
         history=[h.model_dump() for h in body.history],
     )
     return QueryResponse(**result)

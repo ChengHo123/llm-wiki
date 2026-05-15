@@ -412,6 +412,52 @@ async def chat_only_reply(
     )
 
 
+async def maybe_save_chat_to_wiki(
+    question: str,
+    answer: str,
+    api_key_id: uuid.UUID,
+    db: AsyncSession,
+) -> dict:
+    """Chat-only 路徑也跑 judge + refine，讓對話蒸餾出的新概念能複利進 wiki。
+
+    Karpathy 模式核心：「有價值的分析結果存回 wiki，不因對話結束而消失」。
+    即使路由判斷不需查 wiki，答案仍可能揭露新概念或既有頁面間關係。judge 嚴格把關
+    （JUDGE_SAVE_PROMPT 的硬性拒絕條件能擋掉純閒聊），通過後用 keyword 比對挑出
+    可能受影響的既有頁面當 refine context，避免 LLM 在沒看到任何既有結構時盲建新頁。
+    """
+    save_decision, save_reason = await judge_save_decision(question, answer, [])
+    wiki_save: dict = {
+        "save_decision": save_decision,
+        "judge_reason": save_reason,
+        "applied_edits": [],
+        "refine_summary": "",
+    }
+    if not save_decision:
+        return wiki_save
+
+    all_result = await db.execute(
+        select(WikiPage).where(WikiPage.api_key_id == api_key_id)
+    )
+    all_pages = all_result.scalars().all()
+
+    # 用答案內容做關鍵字比對挑可能相關的既有頁，當 refine 編輯目標；
+    # 同時帶入全部 index 頁，讓 LLM 能 update 對應 index 把新主題納入結構。
+    refs = _keyword_match(answer, all_pages, limit=8)
+    index_pages = [p for p in all_pages if p.page_type == "index"]
+
+    try:
+        plan = await refine_wiki_plan(
+            question, answer,
+            referenced_pages=refs,
+            all_index_pages=index_pages,
+        )
+        wiki_save["refine_summary"] = plan.summary
+        wiki_save["applied_edits"] = await apply_refine_plan(plan, api_key_id, db)
+    except Exception as e:
+        wiki_save["refine_summary"] = f"refine 失敗：{e}"
+    return wiki_save
+
+
 def _keyword_match(
     question: str, pages: list[WikiPage], limit: int | None = None
 ) -> list[WikiPage]:
@@ -612,18 +658,28 @@ async def run_query(
     decision = await route_query(question, all_pages, history)
     if not decision.need_wiki:
         answer = await chat_only_reply(question, persona, history)
+        # Karpathy 模式：chat-only 答案也跑 judge+refine，讓有價值的對話結果能複利進 wiki。
+        # save_to_wiki=False 時整段跳過，僅 chat-only path 也尊重旗標。
+        chat_wiki_save = None
+        if save_to_wiki:
+            chat_wiki_save = await maybe_save_chat_to_wiki(
+                question, answer, api_key_id, db,
+            )
         # 不存 question / route_reason 等 LLM 自由文字，避免洩漏使用者隱私
         db.add(ActivityLog(
             api_key_id=api_key_id,
             action="chat",
-            details={},
+            details={
+                "save_decision": (chat_wiki_save or {}).get("save_decision"),
+                "edits_applied": (chat_wiki_save or {}).get("applied_edits", []),
+            },
         ))
         await db.commit()
         return {
             "answer": answer,
             "referenced_pages": [],
             "saved_page": None,
-            "wiki_save": None,
+            "wiki_save": chat_wiki_save,
             "route": {"need_wiki": False, "reason": decision.reason},
         }
 
@@ -735,16 +791,39 @@ async def run_query_stream(
 
         if not decision.need_wiki:
             yield json.dumps({"type": "pages", "pages": []}) + "\n"
+            chat_parts: list[str] = []
             async for delta in stream_llm(
                 system=CHAT_ONLY_SYSTEM_PROMPT,
                 messages=[*history_clean, {"role": "user", "content": question}],
                 max_tokens=1024,
             ):
+                chat_parts.append(delta)
                 yield json.dumps({"type": "chunk", "content": delta}) + "\n"
+
+            # Karpathy 模式：chat-only 答案也跑 judge+refine，避免有價值的對話內容蒸發
+            chat_answer = re.sub(r"<think>[\s\S]*?</think>", "", "".join(chat_parts)).strip()
+            chat_wiki_save = await maybe_save_chat_to_wiki(
+                question, chat_answer, api_key_id, db,
+            )
+            yield json.dumps({
+                "type": "judge",
+                "save": chat_wiki_save["save_decision"],
+                "reason": chat_wiki_save["judge_reason"],
+            }) + "\n"
+            if chat_wiki_save["save_decision"]:
+                yield json.dumps({
+                    "type": "refine",
+                    "edits": chat_wiki_save["applied_edits"],
+                    "summary": chat_wiki_save["refine_summary"],
+                }) + "\n"
+
             db.add(ActivityLog(
                 api_key_id=api_key_id,
                 action="chat",
-                details={},
+                details={
+                    "save_decision": chat_wiki_save["save_decision"],
+                    "edits_applied": chat_wiki_save["applied_edits"],
+                },
             ))
             await db.commit()
             yield json.dumps({"type": "done"}) + "\n"
