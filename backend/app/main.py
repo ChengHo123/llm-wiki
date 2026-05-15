@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
 from app.core.log_buffer import setup_log_buffer
@@ -36,6 +39,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Rich menu / 介紹圖片靜態目錄。LINE Flex carousel 的 imageUrl 從這裡取
+# 目錄不存在就跳過 mount，避免本機沒掛 ./src 時啟動失敗
+_menu_dir = Path(settings.RICH_MENU_ASSETS_DIR)
+if _menu_dir.is_dir():
+    app.mount("/static/menu", StaticFiles(directory=str(_menu_dir)), name="menu")
 
 app.include_router(auth.router, prefix="/api/v1", tags=["Auth"])
 app.include_router(documents.router, prefix="/api/v1", tags=["Documents"])

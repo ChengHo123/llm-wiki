@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     # Frontend URL（用於 LINE bot 推送登入連結）
     FRONTEND_URL: str = "http://localhost:3000"
 
+    # Backend 對外的 HTTPS 公開 URL（LINE rich menu 圖片需要 https://... 的 imageUrl）
+    # 部署時填正式網域，例如 https://api.example.com；本機開發留空時 rich menu 圖片功能會 fallback
+    PUBLIC_BACKEND_URL: str = ""
+
+    # Rich menu / 介紹圖片素材目錄（容器內路徑）。docker-compose 把 host ./assets/line-menu 掛到此處
+    RICH_MENU_ASSETS_DIR: str = "/app/menu_assets"
+
     # Admin 後台帳密（單一管理員，所有 admin endpoint 共用）
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin"

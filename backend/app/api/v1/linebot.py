@@ -9,6 +9,7 @@ import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import openai
@@ -413,6 +414,70 @@ async def _push(user_id: str, text: str) -> None:
     )
 
 
+def _list_menu_image_urls(subdir: str) -> list[str]:
+    """掃 RICH_MENU_ASSETS_DIR/subdir 下 .png/.jpg/.jpeg/.webp，依檔名排序後組成 https URL。
+    PUBLIC_BACKEND_URL 必須為 https；非 https 時 LINE 會拒收 imageUrl，直接回空 list 讓上層 fallback。
+    """
+    base = settings.PUBLIC_BACKEND_URL.rstrip("/")
+    if not base.lower().startswith("https://"):
+        logger.warning("PUBLIC_BACKEND_URL not https: %r; rich menu images unavailable", base)
+        return []
+    asset_dir = Path(settings.RICH_MENU_ASSETS_DIR) / subdir
+    if not asset_dir.is_dir():
+        logger.warning("menu asset dir missing: %s", asset_dir)
+        return []
+    exts = {".png", ".jpg", ".jpeg", ".webp"}
+    files = sorted(
+        p.name for p in asset_dir.iterdir() if p.is_file() and p.suffix.lower() in exts
+    )
+    return [f"{base}/static/menu/{subdir}/{name}" for name in files]
+
+
+async def _reply_flex_image_carousel(
+    reply_token: str,
+    alt_text: str,
+    image_urls: list[str],
+    aspect_ratio: str = "2:3",
+) -> bool:
+    """以 Flex carousel 回覆 portrait 圖片組，左右滑動瀏覽。
+    回傳是否實際送出（圖片為空時不送，讓呼叫端 fallback）。
+    LINE Flex carousel 上限 12 bubble；超過部分直接截斷。
+    """
+    if not image_urls:
+        return False
+    bubbles = [
+        {
+            "type": "bubble",
+            "size": "mega",
+            "hero": {
+                "type": "image",
+                "url": url,
+                "size": "full",
+                "aspectMode": "fit",         # fit 保留原圖完整，不裁切
+                "aspectRatio": aspect_ratio,
+                "action": {                  # 點圖片本身不會觸發新訊息
+                    "type": "postback",
+                    "data": "action=noop",
+                    "displayText": " ",
+                },
+            },
+        }
+        for url in image_urls[:12]
+    ]
+    msg = {
+        "type": "flex",
+        "altText": alt_text,
+        "contents": {"type": "carousel", "contents": bubbles},
+        "quickReply": _quick_reply(),
+    }
+    await _post_line_with_retry(
+        "reply",
+        LINE_REPLY_URL,
+        {"replyToken": reply_token, "messages": [msg]},
+    )
+    return True
+
+
 async def _show_loading(user_id: str, seconds: int = 60) -> None:
     """觸發 LINE「正在輸入…」動畫。1:1 對話才有效。
     必須在 reply 前 await 完成，loading 才會比 reply 早到。
@@ -532,9 +597,14 @@ async def _handle_postback(reply_token: str, user_id: str, data: str) -> None:
     if user_id:
         current_end_user.set(line_tag(user_id))
     voice = _voice_for(user_id)
-    await _show_loading(user_id, 30)
     params = dict(p.split("=", 1) for p in data.split("&") if "=" in p)
     action = params.get("action")
+
+    # noop 必須在 loading 之前處理：rich menu 圖片自身的 hit area 點到時觸發，不該顯示輸入動畫
+    if action == "noop":
+        return
+
+    await _show_loading(user_id, 30)
     logger.info("LINE postback: user=%s action=%s", user_id[:8] if user_id else "?", action)
 
     if action == "reset":
@@ -558,11 +628,45 @@ async def _handle_postback(reply_token: str, user_id: str, data: str) -> None:
         await _send_login_link(reply_token, user_id)
         return
 
+    # Rich menu B 區：介紹嚕比 / wiki — flex carousel 推 assets/line-menu/intro 全部圖
+    if action == "intro":
+        urls = _list_menu_image_urls("intro")
+        sent = await _reply_flex_image_carousel(reply_token, "什麼是 LLM Wiki", urls)
+        if not sent:
+            await _reply(reply_token, "嚕比的介紹圖還在準備，主人晚點再點。")
+        return
+
+    # Rich menu C 區：如何使用 — flex carousel 推 assets/line-menu/howto 全部圖
+    if action == "howto":
+        urls = _list_menu_image_urls("howto")
+        sent = await _reply_flex_image_carousel(reply_token, "如何使用 嚕比 wiki", urls)
+        if not sent:
+            await _reply(reply_token, "使用說明圖還在準備，主人晚點再點。")
+        return
+
+    # Rich menu D 區：保留 slot，內容未定。LINE Manager 可先把 D 區的 postback data
+    # 設為 action=todo，未來想清楚要放什麼（FAQ / 聯絡 / 最新更新…）再改 handler。
+    if action == "todo":
+        await _reply(reply_token, "這個按鈕嚕比的拔拔還沒想好要放什麼，敬請期待 🐾")
+        return
+
     await _reply(reply_token, voice.unknown_button_msg)
 
 
 # Rich Menu / 文字觸發都會打到這裡
 GET_LINK_KEYWORDS = {"取得連結", "登入網頁", "wiki 連結", "/link"}
+
+# Rich menu 各區「文字」action 預設文字 → 對應 postback action
+# LINE OA Manager 簡化版只支援 連結/優惠券/文字/集點卡，無 postback。
+# 解法：每區 action 設「文字」，填入下方 key 字串；使用者按下時送該文字到 bot，
+# text event handler 比對到後 dispatch 到 postback handler 同一條邏輯。
+# 🐾 前綴讓視覺上明顯是 menu tap、不是使用者隨手打的，並避免和自然語意碰撞。
+MENU_TEXT_TRIGGERS: dict[str, str] = {
+    "🐾 進入 wiki": "get_link",
+    "🐾 認識嚕比": "intro",
+    "🐾 使用說明": "howto",
+    "🐾 待開放": "todo",
+}
 
 
 async def _send_login_link(reply_token: str, user_id: str) -> None:
@@ -606,6 +710,12 @@ async def _handle_text_event(reply_token: str, user_id: str, question: str) -> N
 
     if question.strip() in GET_LINK_KEYWORDS:
         await _send_login_link(reply_token, user_id)
+        return
+
+    # Rich menu 文字觸發：使用者按 menu → LINE 把預設文字送來 → dispatch 到 postback handler
+    menu_action = MENU_TEXT_TRIGGERS.get(question.strip())
+    if menu_action:
+        await _handle_postback(reply_token, user_id, f"action={menu_action}")
         return
 
     if user_id and user_id in _pending_users:
